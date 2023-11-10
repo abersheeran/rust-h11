@@ -1,8 +1,7 @@
+use crate::{Event, ProtocolError};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::hash::Hash;
-
-use crate::ProtocolError;
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Hash)]
 pub enum Role {
@@ -44,6 +43,21 @@ pub enum EventType {
     RequestClient,                      // (Request, Switch::Client)
     InformationalResponseSwitchUpgrade, // (InformationalResponse, Switch::SwitchUpgrade)
     NormalResponseSwitchConnect,        // (NormalResponse, Switch::SwitchConnect)
+}
+
+impl From<&Event> for EventType {
+    fn from(value: &Event) -> Self {
+        match value {
+            Event::Request(_) => EventType::Request,
+            Event::NormalResponse(_) => EventType::NormalResponse,
+            Event::InformationalResponse(_) => EventType::InformationalResponse,
+            Event::Data(_) => EventType::Data,
+            Event::EndOfMessage(_) => EventType::EndOfMessage,
+            Event::ConnectionClosed(_) => EventType::ConnectionClosed,
+            Event::NeedData() => EventType::NeedData,
+            Event::Paused() => EventType::Paused,
+        }
+    }
 }
 
 pub struct ConnectionState {

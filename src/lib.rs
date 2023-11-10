@@ -9,7 +9,7 @@ mod _util;
 mod _writers;
 
 pub use _connection::Connection;
-pub use _events::{Data, EndOfMessage, Request, Response, ConnectionClosed, Event};
+pub use _events::{ConnectionClosed, Data, EndOfMessage, Event, Request, Response};
 pub use _headers::Headers;
-pub use _util::{ProtocolError, LocalProtocolError, RemoteProtocolError};
-pub use _state::{EventType, State};
+pub use _state::{EventType, Role, State, Switch};
+pub use _util::{LocalProtocolError, ProtocolError, RemoteProtocolError};

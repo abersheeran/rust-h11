@@ -194,7 +194,7 @@ impl Connection {
             None
         };
         self._cstate
-            .process_event(role, event.clone().into(), server_switch_event)
+            .process_event(role, (&event).into(), server_switch_event)
             .unwrap();
 
         if let Event::Request(request) = event.clone() {
@@ -229,7 +229,7 @@ impl Connection {
                 self.client_is_waiting_for_100_continue = true;
             }
         }
-        match event.clone().into() {
+        match (&event).into() {
             EventType::InformationalResponse => {
                 self.client_is_waiting_for_100_continue = false;
             }
@@ -424,7 +424,7 @@ impl Connection {
         };
         self._process_event(self.our_role, event.clone());
 
-        let event_type: EventType = event.clone().into();
+        let event_type: EventType = (&event).into();
         if event_type == EventType::ConnectionClosed {
             return Ok(None);
         } else {

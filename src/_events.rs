@@ -1,5 +1,4 @@
 use crate::_abnf::{METHOD, REQUEST_TARGET};
-use crate::_state::EventType;
 use crate::{_headers::Headers, _util::ProtocolError};
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
@@ -126,20 +125,5 @@ impl From<EndOfMessage> for Event {
 impl From<ConnectionClosed> for Event {
     fn from(connection_closed: ConnectionClosed) -> Self {
         Self::ConnectionClosed(connection_closed)
-    }
-}
-
-impl Into<EventType> for Event {
-    fn into(self) -> EventType {
-        match self {
-            Self::Request(_) => EventType::Request,
-            Self::NormalResponse(_) => EventType::NormalResponse,
-            Self::InformationalResponse(_) => EventType::InformationalResponse,
-            Self::Data(_) => EventType::Data,
-            Self::EndOfMessage(_) => EventType::EndOfMessage,
-            Self::ConnectionClosed(_) => EventType::ConnectionClosed,
-            Self::NeedData() => EventType::NeedData,
-            Self::Paused() => EventType::Paused,
-        }
     }
 }
