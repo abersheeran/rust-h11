@@ -41,9 +41,9 @@ pub enum EventType {
     NeedData,
     Paused,
     // Combination of EventType and Sentinel
-    RequestClient,                      // (Request, Role::Client)
-    InformationalResponseSwitchUpgrade, // (InformationalResponse, State::Switch_upgrade)
-    NormalResponseSwitchConnect,        // (NormalResponse, State::Switch_connect)
+    RequestClient,                      // (Request, Switch::Client)
+    InformationalResponseSwitchUpgrade, // (InformationalResponse, Switch::SwitchUpgrade)
+    NormalResponseSwitchConnect,        // (NormalResponse, Switch::SwitchConnect)
 }
 
 pub struct ConnectionState {
@@ -244,132 +244,207 @@ impl ConnectionState {
     }
 }
 
-#[test]
-fn test_connection_state() {
-    let mut cs = ConnectionState::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Basic event-triggered transitions
+    #[test]
+    fn test_connection_state() {
+        let mut cs = ConnectionState::new();
 
-    assert_eq!(
-        cs.states,
-        HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
-    );
+        // Basic event-triggered transitions
 
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    // The SERVER-Request special case:
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::SendBody),
-            (Role::Server, State::SendResponse)
-        ])
-    );
+        assert_eq!(
+            cs.states,
+            HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
+        );
 
-    // Illegal transitions raise an error and nothing happens
-    cs.process_event(Role::Client, EventType::Request, None)
-        .expect_err("Expected LocalProtocolError");
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::SendBody),
-            (Role::Server, State::SendResponse)
-        ])
-    );
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        // The SERVER-Request special case:
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::SendBody),
+                (Role::Server, State::SendResponse)
+            ])
+        );
 
-    cs.process_event(Role::Server, EventType::InformationalResponse, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::SendBody),
-            (Role::Server, State::SendResponse)
-        ])
-    );
+        // Illegal transitions raise an error and nothing happens
+        cs.process_event(Role::Client, EventType::Request, None)
+            .expect_err("Expected LocalProtocolError");
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::SendBody),
+                (Role::Server, State::SendResponse)
+            ])
+        );
 
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::SendBody),
-            (Role::Server, State::SendBody)
-        ])
-    );
+        cs.process_event(Role::Server, EventType::InformationalResponse, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::SendBody),
+                (Role::Server, State::SendResponse)
+            ])
+        );
 
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([(Role::Client, State::Done), (Role::Server, State::Done)])
-    );
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::SendBody),
+                (Role::Server, State::SendBody)
+            ])
+        );
 
-    // State-triggered transition
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([(Role::Client, State::Done), (Role::Server, State::Done)])
+        );
 
-    cs.process_event(Role::Server, EventType::ConnectionClosed, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::MustClose),
-            (Role::Server, State::Closed)
-        ])
-    );
-}
+        // State-triggered transition
 
-#[test]
-fn test_connection_state_keep_alive() {
-    // keep_alive = False
-    let mut cs = ConnectionState::new();
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_keep_alive_disabled();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::MustClose),
-            (Role::Server, State::SendResponse)
-        ])
-    );
+        cs.process_event(Role::Server, EventType::ConnectionClosed, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::MustClose),
+                (Role::Server, State::Closed)
+            ])
+        );
+    }
 
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::MustClose),
-            (Role::Server, State::MustClose)
-        ])
-    );
-}
+    #[test]
+    fn test_connection_state_keep_alive() {
+        // keep_alive = False
+        let mut cs = ConnectionState::new();
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_keep_alive_disabled();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::MustClose),
+                (Role::Server, State::SendResponse)
+            ])
+        );
 
-#[test]
-fn test_connection_state_keep_alive_in_done() {
-    // Check that if keep_alive is disabled when the CLIENT is already in DONE,
-    // then this is sufficient to immediately trigger the DONE -> MUST_CLOSE
-    // transition
-    let mut cs = ConnectionState::new();
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    assert_eq!(cs.states[&Role::Client], State::Done);
-    cs.process_keep_alive_disabled();
-    assert_eq!(cs.states[&Role::Client], State::MustClose);
-}
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::MustClose),
+                (Role::Server, State::MustClose)
+            ])
+        );
+    }
 
-#[test]
-fn test_connection_state_switch_denied() {
-    for switch_type in [Switch::SwitchConnect, Switch::SwitchUpgrade] {
-        for deny_early in [true, false] {
+    #[test]
+    fn test_connection_state_keep_alive_in_done() {
+        // Check that if keep_alive is disabled when the CLIENT is already in DONE,
+        // then this is sufficient to immediately trigger the DONE -> MUST_CLOSE
+        // transition
+        let mut cs = ConnectionState::new();
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        assert_eq!(cs.states[&Role::Client], State::Done);
+        cs.process_keep_alive_disabled();
+        assert_eq!(cs.states[&Role::Client], State::MustClose);
+    }
+
+    #[test]
+    fn test_connection_state_switch_denied() {
+        for switch_type in [Switch::SwitchConnect, Switch::SwitchUpgrade] {
+            for deny_early in [true, false] {
+                let mut cs = ConnectionState::new();
+                cs.process_client_switch_proposal(switch_type);
+                cs.process_event(Role::Client, EventType::Request, None)
+                    .unwrap();
+                cs.process_event(Role::Client, EventType::Data, None)
+                    .unwrap();
+                assert_eq!(
+                    cs.states,
+                    HashMap::from([
+                        (Role::Client, State::SendBody),
+                        (Role::Server, State::SendResponse)
+                    ])
+                );
+
+                assert!(cs.pending_switch_proposals.contains(&switch_type));
+
+                if deny_early {
+                    // before client reaches DONE
+                    cs.process_event(Role::Server, EventType::NormalResponse, None)
+                        .unwrap();
+                    assert!(cs.pending_switch_proposals.is_empty());
+                }
+
+                cs.process_event(Role::Client, EventType::EndOfMessage, None)
+                    .unwrap();
+
+                if deny_early {
+                    assert_eq!(
+                        cs.states,
+                        HashMap::from([
+                            (Role::Client, State::Done),
+                            (Role::Server, State::SendBody)
+                        ])
+                    );
+                } else {
+                    assert_eq!(
+                        cs.states,
+                        HashMap::from([
+                            (Role::Client, State::MightSwitchProtocol),
+                            (Role::Server, State::SendResponse)
+                        ])
+                    );
+
+                    cs.process_event(Role::Server, EventType::InformationalResponse, None)
+                        .unwrap();
+                    assert_eq!(
+                        cs.states,
+                        HashMap::from([
+                            (Role::Client, State::MightSwitchProtocol),
+                            (Role::Server, State::SendResponse)
+                        ])
+                    );
+
+                    cs.process_event(Role::Server, EventType::NormalResponse, None)
+                        .unwrap();
+                    assert_eq!(
+                        cs.states,
+                        HashMap::from([
+                            (Role::Client, State::Done),
+                            (Role::Server, State::SendBody)
+                        ])
+                    );
+                    assert!(cs.pending_switch_proposals.is_empty());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_connection_state_protocol_switch_accepted() {
+        for switch_event in [Switch::SwitchUpgrade, Switch::SwitchConnect] {
             let mut cs = ConnectionState::new();
-            cs.process_client_switch_proposal(switch_type);
+            cs.process_client_switch_proposal(switch_event);
             cs.process_event(Role::Client, EventType::Request, None)
                 .unwrap();
             cs.process_event(Role::Client, EventType::Data, None)
@@ -382,151 +457,36 @@ fn test_connection_state_switch_denied() {
                 ])
             );
 
-            assert!(cs.pending_switch_proposals.contains(&switch_type));
-
-            if deny_early {
-                // before client reaches DONE
-                cs.process_event(Role::Server, EventType::NormalResponse, None)
-                    .unwrap();
-                assert!(cs.pending_switch_proposals.is_empty());
-            }
-
             cs.process_event(Role::Client, EventType::EndOfMessage, None)
                 .unwrap();
-
-            if deny_early {
-                assert_eq!(
-                    cs.states,
-                    HashMap::from([(Role::Client, State::Done), (Role::Server, State::SendBody)])
-                );
-            } else {
-                assert_eq!(
-                    cs.states,
-                    HashMap::from([
-                        (Role::Client, State::MightSwitchProtocol),
-                        (Role::Server, State::SendResponse)
-                    ])
-                );
-
-                cs.process_event(Role::Server, EventType::InformationalResponse, None)
-                    .unwrap();
-                assert_eq!(
-                    cs.states,
-                    HashMap::from([
-                        (Role::Client, State::MightSwitchProtocol),
-                        (Role::Server, State::SendResponse)
-                    ])
-                );
-
-                cs.process_event(Role::Server, EventType::NormalResponse, None)
-                    .unwrap();
-                assert_eq!(
-                    cs.states,
-                    HashMap::from([(Role::Client, State::Done), (Role::Server, State::SendBody)])
-                );
-                assert!(cs.pending_switch_proposals.is_empty());
-            }
-        }
-    }
-}
-
-#[test]
-fn test_connection_state_protocol_switch_accepted() {
-    for switch_event in [Switch::SwitchUpgrade, Switch::SwitchConnect] {
-        let mut cs = ConnectionState::new();
-        cs.process_client_switch_proposal(switch_event);
-        cs.process_event(Role::Client, EventType::Request, None)
-            .unwrap();
-        cs.process_event(Role::Client, EventType::Data, None)
-            .unwrap();
-        assert_eq!(
-            cs.states,
-            HashMap::from([
-                (Role::Client, State::SendBody),
-                (Role::Server, State::SendResponse)
-            ])
-        );
-
-        cs.process_event(Role::Client, EventType::EndOfMessage, None)
-            .unwrap();
-        assert_eq!(
-            cs.states,
-            HashMap::from([
-                (Role::Client, State::MightSwitchProtocol),
-                (Role::Server, State::SendResponse)
-            ])
-        );
-
-        cs.process_event(Role::Server, EventType::InformationalResponse, None)
-            .unwrap();
-        assert_eq!(
-            cs.states,
-            HashMap::from([
-                (Role::Client, State::MightSwitchProtocol),
-                (Role::Server, State::SendResponse)
-            ])
-        );
-
-        cs.process_event(
-            Role::Server,
-            match switch_event {
-                Switch::SwitchUpgrade => EventType::InformationalResponse,
-                Switch::SwitchConnect => EventType::NormalResponse,
-                _ => panic!(),
-            },
-            Some(switch_event),
-        )
-        .unwrap();
-        assert_eq!(
-            cs.states,
-            HashMap::from([
-                (Role::Client, State::SwitchedProtocol),
-                (Role::Server, State::SwitchedProtocol)
-            ])
-        );
-    }
-}
-
-#[test]
-fn test_connection_state_double_protocol_switch() {
-    // CONNECT + Upgrade is legal! Very silly, but legal. So we support
-    // it. Because sometimes doing the silly thing is easier than not.
-    for server_switch in [
-        None,
-        Some(Switch::SwitchUpgrade),
-        Some(Switch::SwitchConnect),
-    ] {
-        let mut cs = ConnectionState::new();
-        cs.process_client_switch_proposal(Switch::SwitchUpgrade);
-        cs.process_client_switch_proposal(Switch::SwitchConnect);
-        cs.process_event(Role::Client, EventType::Request, None)
-            .unwrap();
-        cs.process_event(Role::Client, EventType::EndOfMessage, None)
-            .unwrap();
-        assert_eq!(
-            cs.states,
-            HashMap::from([
-                (Role::Client, State::MightSwitchProtocol),
-                (Role::Server, State::SendResponse)
-            ])
-        );
-        cs.process_event(
-            Role::Server,
-            match server_switch {
-                Some(Switch::SwitchUpgrade) => EventType::InformationalResponse,
-                Some(Switch::SwitchConnect) => EventType::NormalResponse,
-                None => EventType::NormalResponse,
-                _ => panic!(),
-            },
-            server_switch,
-        )
-        .unwrap();
-        if server_switch.is_none() {
             assert_eq!(
                 cs.states,
-                HashMap::from([(Role::Client, State::Done), (Role::Server, State::SendBody)])
+                HashMap::from([
+                    (Role::Client, State::MightSwitchProtocol),
+                    (Role::Server, State::SendResponse)
+                ])
             );
-        } else {
+
+            cs.process_event(Role::Server, EventType::InformationalResponse, None)
+                .unwrap();
+            assert_eq!(
+                cs.states,
+                HashMap::from([
+                    (Role::Client, State::MightSwitchProtocol),
+                    (Role::Server, State::SendResponse)
+                ])
+            );
+
+            cs.process_event(
+                Role::Server,
+                match switch_event {
+                    Switch::SwitchUpgrade => EventType::InformationalResponse,
+                    Switch::SwitchConnect => EventType::NormalResponse,
+                    _ => panic!(),
+                },
+                Some(switch_event),
+            )
+            .unwrap();
             assert_eq!(
                 cs.states,
                 HashMap::from([
@@ -536,147 +496,198 @@ fn test_connection_state_double_protocol_switch() {
             );
         }
     }
-}
 
-#[test]
-fn test_connection_state_inconsistent_protocol_switch() {
-    for (client_switches, server_switch) in [
-        (vec![], Switch::SwitchUpgrade),
-        (vec![], Switch::SwitchConnect),
-        (vec![Switch::SwitchUpgrade], Switch::SwitchConnect),
-        (vec![Switch::SwitchConnect], Switch::SwitchUpgrade),
-    ] {
-        let mut cs = ConnectionState::new();
-        for client_switch in client_switches.clone() {
-            cs.process_client_switch_proposal(client_switch);
+    #[test]
+    fn test_connection_state_double_protocol_switch() {
+        // CONNECT + Upgrade is legal! Very silly, but legal. So we support
+        // it. Because sometimes doing the silly thing is easier than not.
+        for server_switch in [
+            None,
+            Some(Switch::SwitchUpgrade),
+            Some(Switch::SwitchConnect),
+        ] {
+            let mut cs = ConnectionState::new();
+            cs.process_client_switch_proposal(Switch::SwitchUpgrade);
+            cs.process_client_switch_proposal(Switch::SwitchConnect);
+            cs.process_event(Role::Client, EventType::Request, None)
+                .unwrap();
+            cs.process_event(Role::Client, EventType::EndOfMessage, None)
+                .unwrap();
+            assert_eq!(
+                cs.states,
+                HashMap::from([
+                    (Role::Client, State::MightSwitchProtocol),
+                    (Role::Server, State::SendResponse)
+                ])
+            );
+            cs.process_event(
+                Role::Server,
+                match server_switch {
+                    Some(Switch::SwitchUpgrade) => EventType::InformationalResponse,
+                    Some(Switch::SwitchConnect) => EventType::NormalResponse,
+                    None => EventType::NormalResponse,
+                    _ => panic!(),
+                },
+                server_switch,
+            )
+            .unwrap();
+            if server_switch.is_none() {
+                assert_eq!(
+                    cs.states,
+                    HashMap::from([(Role::Client, State::Done), (Role::Server, State::SendBody)])
+                );
+            } else {
+                assert_eq!(
+                    cs.states,
+                    HashMap::from([
+                        (Role::Client, State::SwitchedProtocol),
+                        (Role::Server, State::SwitchedProtocol)
+                    ])
+                );
+            }
         }
+    }
+
+    #[test]
+    fn test_connection_state_inconsistent_protocol_switch() {
+        for (client_switches, server_switch) in [
+            (vec![], Switch::SwitchUpgrade),
+            (vec![], Switch::SwitchConnect),
+            (vec![Switch::SwitchUpgrade], Switch::SwitchConnect),
+            (vec![Switch::SwitchConnect], Switch::SwitchUpgrade),
+        ] {
+            let mut cs = ConnectionState::new();
+            for client_switch in client_switches.clone() {
+                cs.process_client_switch_proposal(client_switch);
+            }
+            cs.process_event(Role::Client, EventType::Request, None)
+                .unwrap();
+            cs.process_event(Role::Server, EventType::NormalResponse, Some(server_switch))
+                .expect_err("Expected LocalProtocolError");
+        }
+    }
+
+    #[test]
+    fn test_connection_state_keepalive_protocol_switch_interaction() {
+        // keep_alive=False + pending_switch_proposals
+        let mut cs = ConnectionState::new();
+        cs.process_client_switch_proposal(Switch::SwitchUpgrade);
         cs.process_event(Role::Client, EventType::Request, None)
             .unwrap();
-        cs.process_event(Role::Server, EventType::NormalResponse, Some(server_switch))
+        cs.process_keep_alive_disabled();
+        cs.process_event(Role::Client, EventType::Data, None)
+            .unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([
+                (Role::Client, State::SendBody),
+                (Role::Server, State::SendResponse)
+            ])
+        );
+    }
+
+    #[test]
+    fn test_connection_state_reuse() {
+        let mut cs = ConnectionState::new();
+
+        cs.start_next_cycle()
+            .expect_err("Expected LocalProtocolError");
+
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+
+        cs.start_next_cycle()
+            .expect_err("Expected LocalProtocolError");
+
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+
+        cs.start_next_cycle().unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
+        );
+
+        // No keepalive
+
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_keep_alive_disabled();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+
+        cs.start_next_cycle()
+            .expect_err("Expected LocalProtocolError");
+
+        // One side closed
+
+        cs = ConnectionState::new();
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::ConnectionClosed, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+
+        cs.start_next_cycle()
+            .expect_err("Expected LocalProtocolError");
+
+        // Succesful protocol switch
+
+        cs = ConnectionState::new();
+        cs.process_client_switch_proposal(Switch::SwitchUpgrade);
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        cs.process_event(
+            Role::Server,
+            EventType::InformationalResponse,
+            Some(Switch::SwitchUpgrade),
+        )
+        .unwrap();
+
+        cs.start_next_cycle()
+            .expect_err("Expected LocalProtocolError");
+
+        // Failed protocol switch
+
+        cs = ConnectionState::new();
+        cs.process_client_switch_proposal(Switch::SwitchUpgrade);
+        cs.process_event(Role::Client, EventType::Request, None)
+            .unwrap();
+        cs.process_event(Role::Client, EventType::EndOfMessage, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::NormalResponse, None)
+            .unwrap();
+        cs.process_event(Role::Server, EventType::EndOfMessage, None)
+            .unwrap();
+
+        cs.start_next_cycle().unwrap();
+        assert_eq!(
+            cs.states,
+            HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
+        );
+    }
+
+    #[test]
+    fn test_server_request_is_illegal() {
+        // There used to be a bug in how we handled the Request special case that
+        // made this allowed...
+        let mut cs = ConnectionState::new();
+        cs.process_event(Role::Server, EventType::Request, None)
             .expect_err("Expected LocalProtocolError");
     }
-}
-
-#[test]
-fn test_connection_state_keepalive_protocol_switch_interaction() {
-    // keep_alive=False + pending_switch_proposals
-    let mut cs = ConnectionState::new();
-    cs.process_client_switch_proposal(Switch::SwitchUpgrade);
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_keep_alive_disabled();
-    cs.process_event(Role::Client, EventType::Data, None)
-        .unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([
-            (Role::Client, State::SendBody),
-            (Role::Server, State::SendResponse)
-        ])
-    );
-}
-
-#[test]
-fn test_connection_state_reuse() {
-    let mut cs = ConnectionState::new();
-
-    cs.start_next_cycle()
-        .expect_err("Expected LocalProtocolError");
-
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-
-    cs.start_next_cycle()
-        .expect_err("Expected LocalProtocolError");
-
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-
-    cs.start_next_cycle().unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
-    );
-
-    // No keepalive
-
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_keep_alive_disabled();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-
-    cs.start_next_cycle()
-        .expect_err("Expected LocalProtocolError");
-
-    // One side closed
-
-    cs = ConnectionState::new();
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::ConnectionClosed, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-
-    cs.start_next_cycle()
-        .expect_err("Expected LocalProtocolError");
-
-    // Succesful protocol switch
-
-    cs = ConnectionState::new();
-    cs.process_client_switch_proposal(Switch::SwitchUpgrade);
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    cs.process_event(
-        Role::Server,
-        EventType::InformationalResponse,
-        Some(Switch::SwitchUpgrade),
-    )
-    .unwrap();
-
-    cs.start_next_cycle()
-        .expect_err("Expected LocalProtocolError");
-
-    // Failed protocol switch
-
-    cs = ConnectionState::new();
-    cs.process_client_switch_proposal(Switch::SwitchUpgrade);
-    cs.process_event(Role::Client, EventType::Request, None)
-        .unwrap();
-    cs.process_event(Role::Client, EventType::EndOfMessage, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::NormalResponse, None)
-        .unwrap();
-    cs.process_event(Role::Server, EventType::EndOfMessage, None)
-        .unwrap();
-
-    cs.start_next_cycle().unwrap();
-    assert_eq!(
-        cs.states,
-        HashMap::from([(Role::Client, State::Idle), (Role::Server, State::Idle)])
-    );
-}
-
-#[test]
-fn test_server_request_is_illegal() {
-    // There used to be a bug in how we handled the Request special case that
-    // made this allowed...
-    let mut cs = ConnectionState::new();
-    cs.process_event(Role::Server, EventType::Request, None)
-        .expect_err("Expected LocalProtocolError");
 }

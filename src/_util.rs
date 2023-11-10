@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct LocalProtocolError {
     pub message: String,
     pub code: u16,
@@ -49,7 +49,7 @@ impl LocalProtocolError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct RemoteProtocolError {
     pub message: String,
     pub code: u16,
@@ -91,7 +91,7 @@ impl From<&str> for RemoteProtocolError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum ProtocolError {
     LocalProtocolError(LocalProtocolError),
     RemoteProtocolError(RemoteProtocolError),

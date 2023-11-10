@@ -9,11 +9,11 @@ use lazy_static::lazy_static;
 use regex::bytes::Regex;
 
 lazy_static! {
-    static ref HEADER_FIELD_RE: Regex = Regex::new(&HEADER_FIELD).unwrap();
+    static ref HEADER_FIELD_RE: Regex = Regex::new(&format!(r"^{}$", *HEADER_FIELD)).unwrap();
     static ref OBS_FOLD_RE: Regex = Regex::new(r"[ \t]+").unwrap();
 }
 
-fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Vec<Vec<u8>> {
+fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Result<Vec<Vec<u8>>, ProtocolError> {
     let mut out = vec![];
     let mut it = lines.iter();
     let mut last: Option<Vec<u8>> = None;
@@ -21,7 +21,9 @@ fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Vec<Vec<u8>> {
         let match_ = OBS_FOLD_RE.find(line);
         if let Some(match_) = match_ {
             if last.is_none() {
-                panic!("continuation line at start of headers");
+                return Err(ProtocolError::LocalProtocolError(
+                    "continuation line at start of headers".into(),
+                ));
             }
             if let Some(last) = last.as_mut() {
                 last.extend_from_slice(b" ");
@@ -37,16 +39,31 @@ fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Vec<Vec<u8>> {
     if let Some(last) = last.take() {
         out.push(last);
     }
-    out
+    Ok(out)
 }
 
-fn _decode_header_lines(lines: Vec<Vec<u8>>) -> Vec<(Vec<u8>, Vec<u8>)> {
-    let mut out = vec![];
-    for line in _obsolete_line_fold(lines.iter().map(|line| line.as_slice()).collect()) {
-        let matches = HEADER_FIELD_RE.find(&line).unwrap();
-        out.push((matches.as_bytes().to_vec(), matches.as_bytes().to_vec()));
+fn _decode_header_lines(lines: Vec<Vec<u8>>) -> Result<Vec<(Vec<u8>, Vec<u8>)>, ProtocolError> {
+    match _obsolete_line_fold(lines.iter().map(|line| line.as_slice()).collect()) {
+        Ok(lines) => {
+            let mut out = vec![];
+            for line in lines {
+                let matches = match HEADER_FIELD_RE.captures(&line) {
+                    Some(matches) => matches,
+                    None => {
+                        return Err(ProtocolError::LocalProtocolError(
+                            format!("illegal header line {:?}", &line).into(),
+                        ))
+                    }
+                };
+                out.push((
+                    matches["field_name"].to_vec(),
+                    matches["field_value"].to_vec(),
+                ));
+            }
+            Ok(out)
+        }
+        Err(error) => Err(error),
     }
-    out
 }
 
 lazy_static! {
@@ -79,18 +96,28 @@ impl Reader for IdleClientReader {
                 ("no request line received".to_string(), 400).into(),
             ));
         }
-        let matches = REQUEST_LINE_RE.find(&lines[0]).unwrap();
-        let headers = match normalize_and_validate(_decode_header_lines(lines[1..].to_vec()), true)
-        {
-            Ok(headers) => headers,
-            Err(e) => return Err(e),
+        let matches = match REQUEST_LINE_RE.captures(&lines[0]) {
+            Some(matches) => matches,
+            None => {
+                return Err(ProtocolError::LocalProtocolError(
+                    format!("illegal request line {:?}", &lines[0]).into(),
+                ))
+            }
+        };
+
+        let headers = match _decode_header_lines(lines[1..].to_vec()) {
+            Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
+                Ok(headers) => headers,
+                Err(error) => return Err(error),
+            },
+            Err(error) => return Err(error),
         };
 
         match Request::new(
-            matches.as_bytes().to_vec(),
+            matches["method"].to_vec(),
             headers,
-            matches.as_bytes().to_vec(),
-            matches.as_bytes().to_vec(),
+            matches["target"].to_vec(),
+            matches["http_version"].to_vec(),
         ) {
             Ok(request) => Ok(Some(request.into())),
             Err(e) => Err(e),
@@ -121,18 +148,17 @@ impl Reader for SendResponseServerReader {
                 ("no response line received".to_string(), 400).into(),
             ));
         }
-        let matches = STATUS_LINE_RE.find(&lines[0]).unwrap();
-        let http_version = if matches.as_bytes() == b"1.1" {
-            b"1.1".to_vec()
-        } else {
-            matches.as_bytes().to_vec()
+        let matches = match STATUS_LINE_RE.captures(&lines[0]) {
+            Some(matches) => matches,
+            None => {
+                return Err(ProtocolError::LocalProtocolError(
+                    format!("illegal response line {:?}", &lines[0]).into(),
+                ))
+            }
         };
-        let reason = if matches.as_bytes() == b"" {
-            b"".to_vec()
-        } else {
-            matches.as_bytes().to_vec()
-        };
-        let status_code: u16 = match std::str::from_utf8(&matches.as_bytes().to_vec()) {
+        let http_version = matches["http_version"].to_vec();
+        let reason = matches["reason"].to_vec();
+        let status_code: u16 = match std::str::from_utf8(&matches["status_code"].to_vec()) {
             Ok(status_code) => match status_code.parse() {
                 Ok(status_code) => status_code,
                 Err(_) => {
@@ -147,10 +173,12 @@ impl Reader for SendResponseServerReader {
                 ))
             }
         };
-        let headers = match normalize_and_validate(_decode_header_lines(lines[1..].to_vec()), true)
-        {
-            Ok(headers) => headers,
-            Err(e) => return Err(e),
+        let headers = match _decode_header_lines(lines[1..].to_vec()) {
+            Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
+                Ok(headers) => headers,
+                Err(error) => return Err(error),
+            },
+            Err(error) => return Err(error),
         };
 
         return Ok(Some(Event::from(Response {
@@ -237,11 +265,14 @@ impl Reader for ChunkedReader {
     fn call(&mut self, buf: &mut ReceiveBuffer) -> Result<Option<Event>, ProtocolError> {
         if self.reading_trailer {
             match buf.maybe_extract_lines() {
-                Some(lines) => match normalize_and_validate(_decode_header_lines(lines), false) {
-                    Ok(headers) => {
-                        return Ok(Some(EndOfMessage { headers: headers }.into()));
-                    }
-                    Err(e) => return Err(e),
+                Some(lines) => match _decode_header_lines(lines[1..].to_vec()) {
+                    Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
+                        Ok(headers) => {
+                            return Ok(Some(EndOfMessage { headers }.into()));
+                        }
+                        Err(e) => return Err(e),
+                    },
+                    Err(error) => return Err(error),
                 },
                 None => return Ok(None),
             }
@@ -342,46 +373,3 @@ impl Reader for ClosedReader {
         Ok(None)
     }
 }
-
-// enum ReadersKeyType {
-//     ClientIdle,
-//     ServerIdle,
-//     ServerSendResponse,
-//     ClientDone,
-//     ClientMustClose,
-//     ClientClosed,
-//     ServerDone,
-//     ServerMustClose,
-//     ServerClosed,
-//     SendBodyChunked,
-//     SendBodyContentLength,
-//     SendBodyHttp10,
-// }
-
-// impl From<(Sentinel, Sentinel)> for ReadersKeyType {
-//     fn from(value: (Sentinel, Sentinel)) -> Self {
-//         match value {
-//             (Role::Client, State::Idle) => Self::ClientIdle,
-//             (Role::Server, State::Idle) => Self::ServerIdle,
-//             (Role::Server, State::SendResponse) => Self::ServerSendResponse,
-//             (Role::Client, State::Done) => Self::ClientDone,
-//             (Role::Client, State::MustClose) => Self::ClientMustClose,
-//             (Role::Client, State::Closed) => Self::ClientClosed,
-//             (Role::Server, State::Done) => Self::ServerDone,
-//             (Role::Server, State::MustClose) => Self::ServerMustClose,
-//             (Role::Server, State::Closed) => Self::ServerClosed,
-//             _ => panic!("invalid state transition"),
-//         }
-//     }
-// }
-
-// impl From<(Sentinel, &str)> for ReadersKeyType {
-//     fn from(value: (Sentinel, &str)) -> Self {
-//         match value {
-//             (State::SendBody, "chunked") => Self::SendBodyChunked,
-//             (State::SendBody, "content-length") => Self::SendBodyContentLength,
-//             (State::SendBody, "http/1.0") => Self::SendBodyHttp10,
-//             _ => panic!("invalid state transition"),
-//         }
-//     }
-// }

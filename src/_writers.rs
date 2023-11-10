@@ -196,35 +196,3 @@ pub fn http10_writer() -> impl FnMut(Box<dyn Any>) -> Result<Vec<u8>, ProtocolEr
     let mut writer = Http10Writer;
     move |data: Box<dyn Any>| writer.call(data)
 }
-
-// #[derive(Debug, Hash, Eq, PartialEq)]
-// pub enum WritersKeyType {
-//     ClientIdle,
-//     ServerIdle,
-//     ServerSendResponse,
-//     SendBodyChunked,
-//     SendBodyContentLength,
-//     SendBodyHttp10,
-// }
-
-// impl From<(Sentinel, Sentinel)> for WritersKeyType {
-//     fn from(value: (Sentinel, Sentinel)) -> Self {
-//         match value {
-//             (Role::Client, State::Idle) => Self::ClientIdle,
-//             (Role::Server, State::Idle) => Self::ServerIdle,
-//             (Role::Server, State::SendResponse) => Self::ServerSendResponse,
-//             _ => panic!("invalid state transition"),
-//         }
-//     }
-// }
-
-// impl From<(Sentinel, &str)> for WritersKeyType {
-//     fn from(value: (Sentinel, &str)) -> Self {
-//         match value {
-//             (State::SendBody, "chunked") => Self::SendBodyChunked,
-//             (State::SendBody, "content-length") => Self::SendBodyContentLength,
-//             (State::SendBody, "http/1.0") => Self::SendBodyHttp10,
-//             _ => panic!("invalid state transition"),
-//         }
-//     }
-// }

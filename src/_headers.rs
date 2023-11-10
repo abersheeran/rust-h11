@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     _abnf::{FIELD_NAME, FIELD_VALUE},
     _events::Request,
@@ -7,9 +9,9 @@ use lazy_static::lazy_static;
 use regex::bytes::Regex;
 
 lazy_static! {
-    static ref CONTENT_LENGTH_RE: Regex = Regex::new(r"[0-9]+").unwrap();
-    static ref FIELD_NAME_RE: Regex = Regex::new(&FIELD_NAME).unwrap();
-    static ref FIELD_VALUE_RE: Regex = Regex::new(&FIELD_VALUE).unwrap();
+    static ref CONTENT_LENGTH_RE: Regex = Regex::new(r"^[0-9]+$").unwrap();
+    static ref FIELD_NAME_RE: Regex = Regex::new(&format!(r"^{}$", FIELD_NAME)).unwrap();
+    static ref FIELD_VALUE_RE: Regex = Regex::new(&format!(r"^{}$", *FIELD_VALUE)).unwrap();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
@@ -42,19 +44,19 @@ pub fn normalize_and_validate(
         if !_parsed {
             if !FIELD_NAME_RE.is_match(&name) {
                 return Err(ProtocolError::LocalProtocolError(
-                    (format!("Illegal header name {:?}", &name), 400).into(),
+                    format!("Illegal header name {:?}", &name).into(),
                 ));
             }
             if !FIELD_VALUE_RE.is_match(&value) {
                 return Err(ProtocolError::LocalProtocolError(
-                    (format!("Illegal header value {:?}", &value), 400).into(),
+                    format!("Illegal header value {:?}", &value).into(),
                 ));
             }
         }
         let raw_name = (*name).clone();
         let name = name.to_ascii_lowercase();
         if name == b"content-length" {
-            let lengths: Vec<Vec<u8>> = value
+            let lengths: HashSet<Vec<u8>> = value
                 .split(|&b| b == b',')
                 .map(|length| {
                     std::str::from_utf8(length)
@@ -66,21 +68,21 @@ pub fn normalize_and_validate(
                 .collect();
             if lengths.len() != 1 {
                 return Err(ProtocolError::LocalProtocolError(
-                    ("conflicting Content-Length headers".to_string(), 400).into(),
+                    "conflicting Content-Length headers".into(),
                 ));
             }
-            if !CONTENT_LENGTH_RE.is_match(&lengths[0]) {
+            let value = lengths.iter().next().unwrap();
+            if !CONTENT_LENGTH_RE.is_match(value) {
                 return Err(ProtocolError::LocalProtocolError(
-                    ("bad Content-Length".to_string(), 400).into(),
+                    "bad Content-Length".into(),
                 ));
             }
-            let value = lengths[0].clone();
             if seen_content_length.is_none() {
                 seen_content_length = Some(value.clone());
-                new_headers.push((raw_name, name, value));
+                new_headers.push((raw_name, name, value.clone()));
             } else if seen_content_length != Some(value.clone()) {
                 return Err(ProtocolError::LocalProtocolError(
-                    ("conflicting Content-Length headers".to_string(), 400).into(),
+                    "conflicting Content-Length headers".into(),
                 ));
             }
         } else if name == b"transfer-encoding" {
@@ -90,7 +92,7 @@ pub fn normalize_and_validate(
             // https://tools.ietf.org/html/rfc7230#section-3.3.1
             if saw_transfer_encoding {
                 return Err(ProtocolError::LocalProtocolError(
-                    ("multiple Transfer-Encoding headers".to_string(), 501).into(),
+                    ("multiple Transfer-Encoding headers", 501).into(),
                 ));
             }
             // "All transfer-coding names are case-insensitive"
@@ -98,11 +100,7 @@ pub fn normalize_and_validate(
             let value = value.to_ascii_lowercase();
             if value != b"chunked" {
                 return Err(ProtocolError::LocalProtocolError(
-                    (
-                        "Only Transfer-Encoding: chunked is supported".to_string(),
-                        501,
-                    )
-                        .into(),
+                    ("Only Transfer-Encoding: chunked is supported", 501).into(),
                 ));
             }
             saw_transfer_encoding = true;
@@ -119,7 +117,7 @@ pub fn get_comma_header(headers: &Headers, name: Vec<u8>) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = vec![];
     for (found_name, found_value) in headers.iter() {
         if found_name == name {
-            for found_split_value in found_value.split(|&b| b == b',') {
+            for found_split_value in found_value.to_ascii_lowercase().split(|&b| b == b',') {
                 let found_split_value = std::str::from_utf8(found_split_value).unwrap().trim();
                 if !found_split_value.is_empty() {
                     out.push(found_split_value.as_bytes().to_vec());
@@ -156,4 +154,429 @@ pub fn has_expect_100_continue(request: &Request) -> bool {
     }
     let expect = get_comma_header(&request.headers, b"expect".to_vec());
     expect.contains(&b"100-continue".to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_normalize_and_validate() {
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"bar".to_vec())], false).unwrap(),
+            Headers(vec![(b"foo".to_vec(), b"foo".to_vec(), b"bar".to_vec())])
+        );
+
+        // no leading/trailing whitespace in names
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo ".to_vec(), b"bar".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("Illegal header name [102, 111, 111, 32]".to_string(), 400).into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b" foo".to_vec(), b"bar".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("Illegal header name [32, 102, 111, 111]".to_string(), 400).into()
+            )
+        );
+
+        // no weird characters in names
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo bar".to_vec(), b"baz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header name [102, 111, 111, 32, 98, 97, 114]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo\x00bar".to_vec(), b"baz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header name [102, 111, 111, 0, 98, 97, 114]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        // Not even 8-bit characters:
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo\xffbar".to_vec(), b"baz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header name [102, 111, 111, 255, 98, 97, 114]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        // And not even the control characters we allow in values:
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo\x01bar".to_vec(), b"baz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header name [102, 111, 111, 1, 98, 97, 114]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+
+        // no return or NUL characters in values
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"bar\rbaz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [98, 97, 114, 13, 98, 97, 122]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"bar\nbaz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [98, 97, 114, 10, 98, 97, 122]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"bar\x00baz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [98, 97, 114, 0, 98, 97, 122]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        // no leading/trailing whitespace
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"barbaz  ".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [98, 97, 114, 98, 97, 122, 32, 32]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"  barbaz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [32, 32, 98, 97, 114, 98, 97, 122]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"barbaz\t".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [98, 97, 114, 98, 97, 122, 9]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"foo".to_vec(), b"\tbarbaz".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Illegal header value [9, 98, 97, 114, 98, 97, 122]".to_string(),
+                    400
+                )
+                    .into()
+            )
+        );
+
+        // content-length
+        assert_eq!(
+            normalize_and_validate(vec![(b"Content-Length".to_vec(), b"1".to_vec())], false)
+                .unwrap(),
+            Headers(vec![(
+                b"Content-Length".to_vec(),
+                b"content-length".to_vec(),
+                b"1".to_vec()
+            )])
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"Content-Length".to_vec(), b"asdf".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(("bad Content-Length".to_string(), 400).into())
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"Content-Length".to_vec(), b"1x".to_vec())], false)
+                .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(("bad Content-Length".to_string(), 400).into())
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![
+                    (b"Content-Length".to_vec(), b"1".to_vec()),
+                    (b"Content-Length".to_vec(), b"2".to_vec())
+                ],
+                false
+            )
+            .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("conflicting Content-Length headers".to_string(), 400).into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![
+                    (b"Content-Length".to_vec(), b"0".to_vec()),
+                    (b"Content-Length".to_vec(), b"0".to_vec())
+                ],
+                false
+            )
+            .unwrap(),
+            Headers(vec![(
+                b"Content-Length".to_vec(),
+                b"content-length".to_vec(),
+                b"0".to_vec()
+            )])
+        );
+        assert_eq!(
+            normalize_and_validate(vec![(b"Content-Length".to_vec(), b"0 , 0".to_vec())], false)
+                .unwrap(),
+            Headers(vec![(
+                b"Content-Length".to_vec(),
+                b"content-length".to_vec(),
+                b"0".to_vec()
+            )])
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![
+                    (b"Content-Length".to_vec(), b"1".to_vec()),
+                    (b"Content-Length".to_vec(), b"1".to_vec()),
+                    (b"Content-Length".to_vec(), b"2".to_vec())
+                ],
+                false
+            )
+            .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("conflicting Content-Length headers".to_string(), 400).into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![(b"Content-Length".to_vec(), b"1 , 1,2".to_vec())],
+                false
+            )
+            .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("conflicting Content-Length headers".to_string(), 400).into()
+            )
+        );
+
+        // transfer-encoding
+        assert_eq!(
+            normalize_and_validate(
+                vec![(b"Transfer-Encoding".to_vec(), b"chunked".to_vec())],
+                false
+            )
+            .unwrap(),
+            Headers(vec![(
+                b"Transfer-Encoding".to_vec(),
+                b"transfer-encoding".to_vec(),
+                b"chunked".to_vec()
+            )])
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![(b"Transfer-Encoding".to_vec(), b"cHuNkEd".to_vec())],
+                false
+            )
+            .unwrap(),
+            Headers(vec![(
+                b"Transfer-Encoding".to_vec(),
+                b"transfer-encoding".to_vec(),
+                b"chunked".to_vec()
+            )])
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![(b"Transfer-Encoding".to_vec(), b"gzip".to_vec())],
+                false
+            )
+            .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                (
+                    "Only Transfer-Encoding: chunked is supported".to_string(),
+                    501
+                )
+                    .into()
+            )
+        );
+        assert_eq!(
+            normalize_and_validate(
+                vec![
+                    (b"Transfer-Encoding".to_vec(), b"chunked".to_vec()),
+                    (b"Transfer-Encoding".to_vec(), b"gzip".to_vec())
+                ],
+                false
+            )
+            .expect_err("Expect ProtocolError::LocalProtocolError"),
+            ProtocolError::LocalProtocolError(
+                ("multiple Transfer-Encoding headers".to_string(), 501).into()
+            )
+        );
+    }
+
+    #[test]
+    fn test_get_set_comma_header() {
+        let headers = normalize_and_validate(
+            vec![
+                (b"Connection".to_vec(), b"close".to_vec()),
+                (b"whatever".to_vec(), b"something".to_vec()),
+                (b"connectiON".to_vec(), b"fOo,, , BAR".to_vec()),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_comma_header(&headers, b"connection".to_vec()),
+            vec![b"close".to_vec(), b"foo".to_vec(), b"bar".to_vec()]
+        );
+
+        let headers = set_comma_header(
+            &headers,
+            b"newthing".to_vec(),
+            vec![b"a".to_vec(), b"b".to_vec()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            headers,
+            Headers(vec![
+                (
+                    b"connection".to_vec(),
+                    b"connection".to_vec(),
+                    b"close".to_vec()
+                ),
+                (
+                    b"whatever".to_vec(),
+                    b"whatever".to_vec(),
+                    b"something".to_vec()
+                ),
+                (
+                    b"connection".to_vec(),
+                    b"connection".to_vec(),
+                    b"fOo,, , BAR".to_vec()
+                ),
+                (b"newthing".to_vec(), b"newthing".to_vec(), b"a".to_vec()),
+                (b"newthing".to_vec(), b"newthing".to_vec(), b"b".to_vec()),
+            ])
+        );
+
+        let headers = set_comma_header(
+            &headers,
+            b"whatever".to_vec(),
+            vec![b"different thing".to_vec()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            headers,
+            Headers(vec![
+                (
+                    b"connection".to_vec(),
+                    b"connection".to_vec(),
+                    b"close".to_vec()
+                ),
+                (
+                    b"connection".to_vec(),
+                    b"connection".to_vec(),
+                    b"fOo,, , BAR".to_vec()
+                ),
+                (b"newthing".to_vec(), b"newthing".to_vec(), b"a".to_vec()),
+                (b"newthing".to_vec(), b"newthing".to_vec(), b"b".to_vec()),
+                (
+                    b"whatever".to_vec(),
+                    b"whatever".to_vec(),
+                    b"different thing".to_vec()
+                ),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_has_100_continue() {
+        assert!(has_expect_100_continue(&Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: normalize_and_validate(
+                vec![
+                    (b"Host".to_vec(), b"example.com".to_vec()),
+                    (b"Expect".to_vec(), b"100-continue".to_vec())
+                ],
+                false
+            )
+            .unwrap(),
+            http_version: b"1.1".to_vec(),
+        }));
+        assert!(!has_expect_100_continue(&Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: normalize_and_validate(
+                vec![(b"Host".to_vec(), b"example.com".to_vec())],
+                false
+            )
+            .unwrap(),
+            http_version: b"1.1".to_vec(),
+        }));
+        // Case insensitive
+        assert!(has_expect_100_continue(&Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: normalize_and_validate(
+                vec![
+                    (b"Host".to_vec(), b"example.com".to_vec()),
+                    (b"Expect".to_vec(), b"100-Continue".to_vec())
+                ],
+                false
+            )
+            .unwrap(),
+            http_version: b"1.1".to_vec(),
+        }));
+        // Doesn't work in HTTP/1.0
+        assert!(!has_expect_100_continue(&Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: normalize_and_validate(
+                vec![
+                    (b"Host".to_vec(), b"example.com".to_vec()),
+                    (b"Expect".to_vec(), b"100-continue".to_vec())
+                ],
+                false
+            )
+            .unwrap(),
+            http_version: b"1.0".to_vec(),
+        }));
+    }
 }

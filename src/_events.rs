@@ -5,8 +5,8 @@ use lazy_static::lazy_static;
 use regex::bytes::Regex;
 
 lazy_static! {
-    static ref METHOD_RE: Regex = Regex::new(&METHOD).unwrap();
-    static ref REQUEST_TARGET_RE: Regex = Regex::new(&REQUEST_TARGET).unwrap();
+    static ref METHOD_RE: Regex = Regex::new(&format!(r"^{}$", *METHOD)).unwrap();
+    static ref REQUEST_TARGET_RE: Regex = Regex::new(&format!(r"^{}$", *REQUEST_TARGET)).unwrap();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
