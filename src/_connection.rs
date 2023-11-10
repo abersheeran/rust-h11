@@ -486,3 +486,144 @@ impl Connection {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_keep_alive() {
+        assert!(_keep_alive(Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: vec![(b"Host".to_vec(), b"Example.com".to_vec())].into(),
+            http_version: b"1.1".to_vec(),
+        }));
+        assert!(!_keep_alive(Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: vec![
+                (b"Host".to_vec(), b"Example.com".to_vec()),
+                (b"Connection".to_vec(), b"close".to_vec()),
+            ]
+            .into(),
+            http_version: b"1.1".to_vec(),
+        }));
+        assert!(!_keep_alive(Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: vec![
+                (b"Host".to_vec(), b"Example.com".to_vec()),
+                (b"Connection".to_vec(), b"a, b, cLOse, foo".to_vec()),
+            ]
+            .into(),
+            http_version: b"1.1".to_vec(),
+        }));
+        assert!(!_keep_alive(Request {
+            method: b"GET".to_vec(),
+            target: b"/".to_vec(),
+            headers: vec![].into(),
+            http_version: b"1.0".to_vec(),
+        }));
+
+        assert!(_keep_alive(Response {
+            status_code: 200,
+            headers: vec![].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"OK".to_vec(),
+        }));
+        assert!(!_keep_alive(Response {
+            status_code: 200,
+            headers: vec![(b"Connection".to_vec(), b"close".to_vec())].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"OK".to_vec(),
+        }));
+        assert!(!_keep_alive(Response {
+            status_code: 200,
+            headers: vec![(b"Connection".to_vec(), b"a, b, cLOse, foo".to_vec()),].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"OK".to_vec(),
+        }));
+        assert!(!_keep_alive(Response {
+            status_code: 200,
+            headers: vec![].into(),
+            http_version: b"1.0".to_vec(),
+            reason: b"OK".to_vec(),
+        }));
+    }
+
+    #[test]
+    fn test_body_framing() {
+        fn headers(cl: Option<usize>, te: bool) -> Headers {
+            let mut headers = vec![];
+            if let Some(cl) = cl {
+                headers.push((
+                    b"Content-Length".to_vec(),
+                    cl.to_string().as_bytes().to_vec(),
+                ));
+            }
+            if te {
+                headers.push((b"Transfer-Encoding".to_vec(), b"chunked".to_vec()));
+            }
+            headers.push((b"Host".to_vec(), b"example.com".to_vec()));
+            return headers.into();
+        }
+
+        fn resp(status_code: u16, cl: Option<usize>, te: bool) -> Response {
+            Response {
+                status_code,
+                headers: headers(cl, te),
+                http_version: b"1.1".to_vec(),
+                reason: b"OK".to_vec(),
+            }
+        }
+
+        fn req(cl: Option<usize>, te: bool) -> Request {
+            Request {
+                method: b"GET".to_vec(),
+                target: b"/".to_vec(),
+                headers: headers(cl, te),
+                http_version: b"1.1".to_vec(),
+            }
+        }
+
+        // Special cases where the headers are ignored:
+        for (cl, te) in vec![(Some(100), false), (None, true), (Some(100), true)] {
+            for (meth, r) in vec![
+                (b"HEAD".to_vec(), resp(200, cl, te)),
+                (b"GET".to_vec(), resp(204, cl, te)),
+                (b"GET".to_vec(), resp(304, cl, te)),
+            ] {
+                assert_eq!(_body_framing(&meth, r), ("content-length", 0));
+            }
+        }
+
+        // Transfer-encoding
+        for (cl, te) in vec![(None, true), (Some(100), true)] {
+            for (meth, r) in vec![
+                (b"".to_vec(), RequestOrResponse::from(req(cl, te))),
+                (b"GET".to_vec(), RequestOrResponse::from(resp(200, cl, te))),
+            ] {
+                assert_eq!(_body_framing(&meth, r), ("chunked", 0));
+            }
+        }
+
+        // Content-Length
+        for (meth, r) in vec![
+            (b"".to_vec(), RequestOrResponse::from(req(Some(100), false))),
+            (
+                b"GET".to_vec(),
+                RequestOrResponse::from(resp(200, Some(100), false)),
+            ),
+        ] {
+            assert_eq!(_body_framing(&meth, r), ("content-length", 100));
+        }
+
+        // No headers
+        assert_eq!(_body_framing(b"", req(None, false)), ("content-length", 0));
+        assert_eq!(
+            _body_framing(b"GET", resp(200, None, false)),
+            ("http/1.0", 0)
+        );
+    }
+}

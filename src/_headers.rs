@@ -33,6 +33,12 @@ impl Headers {
     }
 }
 
+impl From<Vec<(Vec<u8>, Vec<u8>)>> for Headers {
+    fn from(value: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+        normalize_and_validate(value, false).unwrap()
+    }
+}
+
 pub fn normalize_and_validate(
     headers: Vec<(Vec<u8>, Vec<u8>)>,
     _parsed: bool,
