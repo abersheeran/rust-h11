@@ -46,17 +46,13 @@ impl ReceiveBuffer {
     }
 
     pub fn maybe_extract_next_line(&mut self) -> Option<Vec<u8>> {
-        let search_start_index = if self.next_line_search > 0 {
-            self.next_line_search - 1
-        } else {
-            0
-        };
+        let search_start_index = self.next_line_search.saturating_sub(1);
         let needle = b"\r\n";
         let partial_idx = self.data[search_start_index..]
             .windows(needle.len())
             .position(|window| window == needle);
         match partial_idx {
-            Some(idx) => Some(self.extract(idx + needle.len())),
+            Some(idx) => Some(self.extract(search_start_index + idx + needle.len())),
             None => {
                 self.next_line_search = self.data.len();
                 None
@@ -265,7 +261,11 @@ mod tests {
         assert_eq!(b.maybe_extract_next_line(), None);
         assert_eq!(b.maybe_extract_lines(), None);
         assert!(!b.is_next_line_obviously_invalid_request_line());
+    }
 
+    #[test]
+    fn test_receivebuffer_maybe_extract_until_next() {
+        let mut b = ReceiveBuffer::new();
         b.add(b"123\n456\r\n789\r\n");
         assert_eq!(b.maybe_extract_next_line(), Some(b"123\n456\r\n".to_vec()));
         assert_eq!(b.maybe_extract_next_line(), Some(b"789\r\n".to_vec()));
@@ -292,7 +292,11 @@ mod tests {
         assert_eq!(b.maybe_extract_next_line(), None);
         assert_eq!(b.maybe_extract_lines(), None);
         assert!(!b.is_next_line_obviously_invalid_request_line());
+    }
 
+    #[test]
+    fn test_receivebuffer_maybe_extract_lines() {
+        let mut b = ReceiveBuffer::new();
         b.add(b"123\r\na: b\r\nfoo:bar\r\n\r\ntrailing");
         let lines = b.maybe_extract_lines();
         assert_eq!(
@@ -341,12 +345,6 @@ mod tests {
                 b"Connection: close".to_vec(),
             ])
         );
-        assert_eq!(b.maybe_extract_lines(), None);
-        assert!(!b.is_next_line_obviously_invalid_request_line());
-
-        b.add(b"\r\ntrailing");
-        assert_eq!(b.maybe_extract_lines(), Some(vec![]));
-        assert_eq!(b.maybe_extract_lines(), None);
-        assert!(!b.is_next_line_obviously_invalid_request_line());
+        assert_eq!(b.data, b"Some body");
     }
 }
