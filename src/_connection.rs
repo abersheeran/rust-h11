@@ -346,22 +346,17 @@ impl Connection {
         if state == State::MightSwitchProtocol || state == State::SwitchedProtocol {
             return Ok(Event::Paused());
         }
-        match self
+        let event = self
             ._reader
             .as_mut()
             .unwrap()
-            .call(&mut self._receive_buffer)
-        {
-            Ok(event) => {
-                if event.is_none() {
-                    if self._receive_buffer.len() == 0 && self._receive_buffer_closed {
-                        return self._reader.as_mut().unwrap().read_eof();
-                    }
-                }
-                Ok(event.unwrap_or(Event::NeedData()))
+            .call(&mut self._receive_buffer)?;
+        if event.is_none() {
+            if self._receive_buffer.len() == 0 && self._receive_buffer_closed {
+                return self._reader.as_mut().unwrap().read_eof();
             }
-            Err(error) => Err(error),
         }
+        Ok(event.unwrap_or(Event::NeedData()))
     }
 
     pub fn next_event(&mut self) -> Result<Event, ProtocolError> {

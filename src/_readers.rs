@@ -43,27 +43,23 @@ fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Result<Vec<Vec<u8>>, ProtocolError>
 }
 
 fn _decode_header_lines(lines: Vec<Vec<u8>>) -> Result<Vec<(Vec<u8>, Vec<u8>)>, ProtocolError> {
-    match _obsolete_line_fold(lines.iter().map(|line| line.as_slice()).collect()) {
-        Ok(lines) => {
-            let mut out = vec![];
-            for line in lines {
-                let matches = match HEADER_FIELD_RE.captures(&line) {
-                    Some(matches) => matches,
-                    None => {
-                        return Err(ProtocolError::LocalProtocolError(
-                            format!("illegal header line {:?}", &line).into(),
-                        ))
-                    }
-                };
-                out.push((
-                    matches["field_name"].to_vec(),
-                    matches["field_value"].to_vec(),
-                ));
+    let lines = _obsolete_line_fold(lines.iter().map(|line| line.as_slice()).collect())?;
+    let mut out = vec![];
+    for line in lines {
+        let matches = match HEADER_FIELD_RE.captures(&line) {
+            Some(matches) => matches,
+            None => {
+                return Err(ProtocolError::LocalProtocolError(
+                    format!("illegal header line {:?}", &line).into(),
+                ))
             }
-            Ok(out)
-        }
-        Err(error) => Err(error),
+        };
+        out.push((
+            matches["field_name"].to_vec(),
+            matches["field_value"].to_vec(),
+        ));
     }
+    Ok(out)
 }
 
 lazy_static! {
@@ -105,23 +101,17 @@ impl Reader for IdleClientReader {
             }
         };
 
-        let headers = match _decode_header_lines(lines[1..].to_vec()) {
-            Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
-                Ok(headers) => headers,
-                Err(error) => return Err(error),
-            },
-            Err(error) => return Err(error),
-        };
+        let headers = normalize_and_validate(_decode_header_lines(lines[1..].to_vec())?, true)?;
 
-        match Request::new(
-            matches["method"].to_vec(),
-            headers,
-            matches["target"].to_vec(),
-            matches["http_version"].to_vec(),
-        ) {
-            Ok(request) => Ok(Some(request.into())),
-            Err(e) => Err(e),
-        }
+        Ok(Some(
+            Request::new(
+                matches["method"].to_vec(),
+                headers,
+                matches["target"].to_vec(),
+                matches["http_version"].to_vec(),
+            )?
+            .into(),
+        ))
     }
 }
 
@@ -173,13 +163,7 @@ impl Reader for SendResponseServerReader {
                 ))
             }
         };
-        let headers = match _decode_header_lines(lines[1..].to_vec()) {
-            Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
-                Ok(headers) => headers,
-                Err(error) => return Err(error),
-            },
-            Err(error) => return Err(error),
-        };
+        let headers = normalize_and_validate(_decode_header_lines(lines[1..].to_vec())?, true)?;
 
         return Ok(Some(Event::from(Response {
             headers,
@@ -265,15 +249,17 @@ impl Reader for ChunkedReader {
     fn call(&mut self, buf: &mut ReceiveBuffer) -> Result<Option<Event>, ProtocolError> {
         if self.reading_trailer {
             match buf.maybe_extract_lines() {
-                Some(lines) => match _decode_header_lines(lines[1..].to_vec()) {
-                    Ok(raw_headers) => match normalize_and_validate(raw_headers, true) {
-                        Ok(headers) => {
-                            return Ok(Some(EndOfMessage { headers }.into()));
+                Some(lines) => {
+                    return Ok(Some(
+                        EndOfMessage {
+                            headers: normalize_and_validate(
+                                _decode_header_lines(lines[1..].to_vec())?,
+                                true,
+                            )?,
                         }
-                        Err(e) => return Err(e),
-                    },
-                    Err(error) => return Err(error),
-                },
+                        .into(),
+                    ))
+                }
                 None => return Ok(None),
             }
         }

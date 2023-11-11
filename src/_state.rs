@@ -125,16 +125,10 @@ impl ConnectionState {
         if server_switch_event.is_none() && _event_type == EventType::NormalResponse {
             self.pending_switch_proposals.clear();
         }
-        if let Err(error) = self._fire_event_triggered_transitions(role, _event_type) {
-            return Err(error);
-        }
+        self._fire_event_triggered_transitions(role, _event_type)?;
         if _event_type == EventType::Request {
             assert_eq!(role, Role::Client);
-            if let Err(error) =
-                self._fire_event_triggered_transitions(Role::Server, EventType::RequestClient)
-            {
-                return Err(error);
-            }
+            self._fire_event_triggered_transitions(Role::Server, EventType::RequestClient)?
         }
         self._fire_state_triggered_transitions();
         Ok(())

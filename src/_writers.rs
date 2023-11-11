@@ -40,10 +40,7 @@ fn _write_request(request: &Request) -> Result<Vec<u8>, ProtocolError> {
     data_list.append(&mut b" ".to_vec());
     data_list.append(&mut request.target.clone());
     data_list.append(&mut b" HTTP/1.1\r\n".to_vec());
-    match _write_headers(&request.headers) {
-        Ok(mut headers) => data_list.append(&mut headers),
-        Err(e) => return Err(e),
-    }
+    data_list.append(&mut (_write_headers(&request.headers)?));
     Ok(data_list)
 }
 
@@ -68,10 +65,7 @@ fn _write_response(response: &Response) -> Result<Vec<u8>, ProtocolError> {
     data_list.append(&mut b" ".to_vec());
     data_list.append(&mut response.reason.clone());
     data_list.append(&mut b"\r\n".to_vec());
-    match _write_headers(&response.headers) {
-        Ok(mut headers) => data_list.append(&mut headers),
-        Err(e) => return Err(e),
-    }
+    data_list.append(&mut (_write_headers(&response.headers))?);
     Ok(data_list)
 }
 
@@ -159,10 +153,7 @@ impl BodyWriter for ChunkedWriter {
         // _write_headers(headers);
         let mut data_list = Vec::new();
         data_list.append(&mut b"0\r\n".to_vec());
-        match _write_headers(headers) {
-            Ok(mut headers) => data_list.append(&mut headers),
-            Err(e) => return Err(e),
-        }
+        data_list.append(&mut (_write_headers(headers))?);
         Ok(data_list)
     }
 }
