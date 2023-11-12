@@ -96,9 +96,8 @@
 //         assert got_events == expect
 //         return data
 
+use h11::{Connection, Data, Event, EventType, ProtocolError, Role};
 use std::collections::HashMap;
-
-use h11::{Connection, Event, EventType, Role};
 
 pub fn get_all_events(conn: &mut Connection) -> Vec<Event> {
     let mut got_events = Vec::new();
@@ -122,28 +121,28 @@ pub fn receive_and_get(conn: &mut Connection, data: &[u8]) -> Vec<Event> {
     return get_all_events(conn);
 }
 
-pub fn normalize_data_events(in_events: &[Event]) -> Vec<Event> {
+pub fn normalize_data_events(in_events: Vec<Event>) -> Vec<Event> {
     let mut out_events = Vec::new();
-    for event in in_events {
-        let event_type = EventType::from(event);
-        if event_type == EventType::Data {
-            let data = event.as_data().unwrap();
-            let data = Event::Data(data.data.clone());
-            out_events.push(data);
-        }
+    for in_event in in_events {
+        let event = match in_event {
+            Event::Data(data) => Event::Data(Data {
+                data: data.data.clone(),
+                chunk_start: false,
+                chunk_end: false,
+            }),
+            _ => in_event.clone(),
+        };
         if !out_events.is_empty() {
-            let last_event = out_events.last_mut().unwrap();
+            let event_type = EventType::from(&event);
+            let last_event = out_events.last().unwrap();
             let last_event_type = EventType::from(last_event);
             if last_event_type == event_type && event_type == EventType::Data {
-                let last_event = last_event.as_data_mut().unwrap();
-                let data = event.as_data().unwrap();
-                last_event.data.extend(data.data.clone());
-            } else {
-                out_events.push(event.clone());
+                let l = out_events.len();
+                out_events[l - 1] = event;
+                continue;
             }
-        } else {
-            out_events.push(event.clone());
         }
+        out_events.push(event);
     }
     return out_events;
 }
@@ -164,26 +163,38 @@ impl ConnectionPair {
         }
     }
 
-    pub fn send(&mut self, role: Role, send_events: &[Event], expect: &[Event]) -> Vec<u8> {
+    pub fn send(
+        &mut self,
+        role: Role,
+        send_events: Vec<Event>,
+        expect: Option<Vec<Event>>,
+    ) -> Result<Vec<u8>, ProtocolError> {
         let mut data = Vec::new();
         let mut closed = false;
-        for send_event in send_events {
-            match self.conn[&role].send(*send_event) {
-                Ok(new_data) => match new_data {
-                    Some(new_data) => data.extend(new_data),
-                    None => closed = true,
-                },
-                Err(error) => panic!("send error: {:?}", error),
+        for send_event in &send_events {
+            match self.conn.get_mut(&role).unwrap().send(send_event.clone())? {
+                Some(new_data) => data.extend(new_data),
+                None => closed = true,
             }
         }
         if !data.is_empty() {
-            self.conn[&self.other[&role]].receive_data(&data);
+            self.conn
+                .get_mut(&self.other[&role])
+                .unwrap()
+                .receive_data(&data);
         }
         if closed {
-            self.conn[&self.other[&role]].receive_data(b"");
+            self.conn
+                .get_mut(&self.other[&role])
+                .unwrap()
+                .receive_data(b"");
         }
-        let got_events = get_all_events(&mut self.conn[&self.other[&role]]);
-        assert_eq!(got_events, expect);
-        return data;
+        let got_events = get_all_events(self.conn.get_mut(&self.other[&role]).unwrap());
+        match expect {
+            Some(expect) => assert_eq!(got_events, expect),
+            None => assert_eq!(got_events, send_events),
+        };
+
+        Ok(data)
     }
 }
