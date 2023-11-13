@@ -80,7 +80,11 @@ fn test_connection_basics_and_content_length() {
             Role::Client,
             vec![Request::new(
                 b"GET".to_vec(),
-                vec![(b"Host".to_vec(), b"example.com".to_vec())].into(),
+                vec![
+                    (b"Host".to_vec(), b"example.com".to_vec()),
+                    (b"Content-Length".to_vec(), b"10".to_vec())
+                ]
+                .into(),
                 b"/".to_vec(),
                 b"1.1".to_vec(),
             )
