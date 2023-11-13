@@ -161,13 +161,14 @@ impl Connection {
         self.their_role == Role::Client && self.client_is_waiting_for_100_continue
     }
 
-    pub fn start_next_cycle(&mut self) {
+    pub fn start_next_cycle(&mut self) -> Result<(), ProtocolError> {
         let old_states = self._cstate.states.clone();
-        self._cstate.start_next_cycle().unwrap();
+        self._cstate.start_next_cycle()?;
         self._request_method = None;
         self.their_http_version = None;
         self.client_is_waiting_for_100_continue = false;
         self._respond_to_state_changes(old_states, None);
+        Ok(())
     }
 
     fn _process_error(&mut self, role: Role) {
@@ -196,7 +197,7 @@ impl Connection {
         return None;
     }
 
-    fn _process_event(&mut self, role: Role, event: Event) {
+    fn _process_event(&mut self, role: Role, event: Event) -> Result<(), ProtocolError> {
         let old_states = self._cstate.states.clone();
         if role == Role::Client {
             if let Event::Request(request) = event.clone() {
@@ -216,8 +217,7 @@ impl Connection {
             None
         };
         self._cstate
-            .process_event(role, (&event).into(), server_switch_event)
-            .unwrap();
+            .process_event(role, (&event).into(), server_switch_event)?;
 
         if let Event::Request(request) = event.clone() {
             self._request_method = Some(request.method);
@@ -272,6 +272,7 @@ impl Connection {
         }
 
         self._respond_to_state_changes(old_states, Some(event));
+        Ok(())
     }
 
     fn _respond_to_state_changes(
@@ -353,7 +354,7 @@ impl Connection {
     }
 
     fn _extract_next_receive_event(&mut self) -> Result<Event, ProtocolError> {
-        let state = self._cstate.states[&self.their_role];
+        let state = self.get_their_state();
         if state == State::Done && self._receive_buffer.len() > 0 {
             return Ok(Event::Paused());
         }
@@ -374,14 +375,14 @@ impl Connection {
     }
 
     pub fn next_event(&mut self) -> Result<Event, ProtocolError> {
-        if self._cstate.states[&self.their_role] == State::Error {
+        if self.get_their_state() == State::Error {
             panic!("Can't receive data when peer state is ERROR");
         }
         match self._extract_next_receive_event() {
             Ok(event) => {
                 match event {
                     Event::NeedData() | Event::Paused() => {
-                        self._process_event(self.their_role, event.clone())
+                        self._process_event(self.their_role, event.clone())?;
                     }
                     _ => {}
                 };
@@ -427,7 +428,7 @@ impl Connection {
             ));
         }
         event = if let Event::NormalResponse(response) = &event {
-            Event::NormalResponse(self._clean_up_response_headers_for_sending(response.clone()))
+            Event::NormalResponse(self._clean_up_response_headers_for_sending(response.clone())?)
         } else {
             event
         };
@@ -435,7 +436,7 @@ impl Connection {
         {
             res = self._writer.as_mut().unwrap()(event.clone());
         }
-        self._process_event(self.our_role, event.clone());
+        self._process_event(self.our_role, event.clone())?;
         let event_type: EventType = (&event).into();
         if event_type == EventType::ConnectionClosed {
             return Ok(None);
@@ -454,7 +455,10 @@ impl Connection {
         self._process_error(self.our_role);
     }
 
-    fn _clean_up_response_headers_for_sending(&self, response: Response) -> Response {
+    fn _clean_up_response_headers_for_sending(
+        &self,
+        response: Response,
+    ) -> Result<Response, ProtocolError> {
         let mut headers = response.clone().headers;
         let mut need_close = false;
         let mut method_for_choosing_headers = self._request_method.clone().unwrap();
@@ -463,15 +467,14 @@ impl Connection {
         }
         let (framing_type, _) = _body_framing(&method_for_choosing_headers, response.clone());
         if framing_type == "chunked" || framing_type == "http/1.0" {
-            headers = set_comma_header(&headers, b"content-length".to_vec(), vec![]).unwrap();
+            headers = set_comma_header(&headers, b"content-length".to_vec(), vec![])?;
             if self
                 .their_http_version
                 .clone()
                 .map(|v| v < b"1.1".to_vec())
                 .unwrap_or(true)
             {
-                headers =
-                    set_comma_header(&headers, b"transfer-encoding".to_vec(), vec![]).unwrap();
+                headers = set_comma_header(&headers, b"transfer-encoding".to_vec(), vec![])?;
                 if self._request_method.clone().unwrap() != b"HEAD".to_vec() {
                     need_close = true;
                 }
@@ -480,22 +483,21 @@ impl Connection {
                     &headers,
                     b"transfer-encoding".to_vec(),
                     vec![b"chunked".to_vec()],
-                )
-                .unwrap();
+                )?;
             }
         }
         if !self._cstate.keep_alive || need_close {
             let mut connection = get_comma_header(&headers, b"connection".to_vec());
             connection.retain(|x| x != &b"keep-alive".to_vec());
             connection.push(b"close".to_vec());
-            headers = set_comma_header(&headers, b"connection".to_vec(), connection).unwrap();
+            headers = set_comma_header(&headers, b"connection".to_vec(), connection)?;
         }
-        return Response {
+        return Ok(Response {
             headers,
             status_code: response.status_code,
             http_version: response.http_version,
             reason: response.reason,
-        };
+        });
     }
 }
 
