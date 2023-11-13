@@ -104,17 +104,17 @@ fn _body_framing<T: Into<RequestOrResponse>>(request_method: &[u8], event: T) ->
 }
 
 pub struct Connection {
-    our_role: Role,
-    their_role: Role,
+    pub our_role: Role,
+    pub their_role: Role,
     _cstate: ConnectionState,
     _writer: Option<Box<WriterFnMut>>,
     _reader: Option<Box<dyn Reader>>,
     _max_incomplete_event_size: usize,
     _receive_buffer: ReceiveBuffer,
     _receive_buffer_closed: bool,
-    their_http_version: Option<Vec<u8>>,
+    pub their_http_version: Option<Vec<u8>>,
     _request_method: Option<Vec<u8>>,
-    client_is_waiting_for_100_continue: bool,
+    pub client_is_waiting_for_100_continue: bool,
 }
 
 impl Connection {
@@ -127,8 +127,14 @@ impl Connection {
                 Role::Client
             },
             _cstate: ConnectionState::new(),
-            _writer: None,
-            _reader: None,
+            _writer: match our_role {
+                Role::Client => Some(Box::new(write_request)),
+                Role::Server => Some(Box::new(write_response)),
+            },
+            _reader: match our_role {
+                Role::Server => Some(Box::new(IdleClientReader {})),
+                Role::Client => Some(Box::new(SendResponseServerReader {})),
+            },
             _max_incomplete_event_size: max_incomplete_event_size
                 .unwrap_or(DEFAULT_MAX_INCOMPLETE_EVENT_SIZE),
             _receive_buffer: ReceiveBuffer::new(),
@@ -137,6 +143,22 @@ impl Connection {
             _request_method: None,
             client_is_waiting_for_100_continue: false,
         }
+    }
+
+    pub fn get_states(&self) -> HashMap<Role, State> {
+        self._cstate.states.clone()
+    }
+
+    pub fn get_our_state(&self) -> State {
+        self._cstate.states[&self.our_role]
+    }
+
+    pub fn get_their_state(&self) -> State {
+        self._cstate.states[&self.their_role]
+    }
+
+    pub fn get_they_are_waiting_for_100_continue(&self) -> bool {
+        self.their_role == Role::Client && self.client_is_waiting_for_100_continue
     }
 
     pub fn start_next_cycle(&mut self) {
@@ -257,72 +279,64 @@ impl Connection {
         old_states: HashMap<Role, State>,
         event: Option<Event>,
     ) {
-        if self._cstate.states[&self.our_role] != old_states[&self.our_role] {
+        if self.get_our_state() != old_states[&self.our_role] {
             let state = self._cstate.states[&self.our_role];
-            self._writer = if let Some(event) = event.clone() {
-                match state {
-                    State::SendBody => {
-                        let (framing_type, length) = _body_framing(
-                            &self._request_method.as_ref().unwrap(),
-                            RequestOrResponse::from(event),
-                        );
+            self._writer = match state {
+                State::SendBody => {
+                    let (framing_type, length) = _body_framing(
+                        &self._request_method.as_ref().unwrap(),
+                        RequestOrResponse::from(event.clone().unwrap()),
+                    );
 
-                        match framing_type {
-                            "content-length" => Some(Box::new(content_length_writer(length))),
-                            "chunked" => Some(Box::new(chunked_writer())),
-                            "http/1.0" => Some(Box::new(http10_writer())),
-                            _ => {
-                                panic!("Invalid role and framing type combination");
-                            }
+                    match framing_type {
+                        "content-length" => Some(Box::new(content_length_writer(length))),
+                        "chunked" => Some(Box::new(chunked_writer())),
+                        "http/1.0" => Some(Box::new(http10_writer())),
+                        _ => {
+                            panic!("Invalid role and framing type combination");
                         }
                     }
-                    _ => match (&self.our_role, state) {
-                        (Role::Client, State::Idle) => Some(Box::new(write_request)),
-                        (Role::Server, State::Idle) => Some(Box::new(write_response)),
-                        (Role::Server, State::SendResponse) => Some(Box::new(write_response)),
-                        _ => None,
-                    },
                 }
-            } else {
-                None
+                _ => match (&self.our_role, state) {
+                    (Role::Client, State::Idle) => Some(Box::new(write_request)),
+                    (Role::Server, State::Idle) => Some(Box::new(write_response)),
+                    (Role::Server, State::SendResponse) => Some(Box::new(write_response)),
+                    _ => None,
+                },
             };
         }
-        if self._cstate.states[&self.their_role] != old_states[&self.their_role] {
-            self._reader = if let Some(event) = event.clone() {
-                match self._cstate.states[&self.their_role] {
-                    State::SendBody => {
-                        let (framing_type, length) = _body_framing(
-                            &self._request_method.as_ref().unwrap(),
-                            RequestOrResponse::from(event),
-                        );
-                        match framing_type {
-                            "content-length" => {
-                                Some(Box::new(ContentLengthReader::new(length as usize)))
-                            }
-                            "chunked" => Some(Box::new(ChunkedReader::new())),
-                            "http/1.0" => Some(Box::new(Http10Reader {})),
-                            _ => {
-                                panic!("Invalid role and framing type combination");
-                            }
+        if self.get_their_state() != old_states[&self.their_role] {
+            self._reader = match self._cstate.states[&self.their_role] {
+                State::SendBody => {
+                    let (framing_type, length) = _body_framing(
+                        &self._request_method.as_ref().unwrap(),
+                        RequestOrResponse::from(event.clone().unwrap()),
+                    );
+                    match framing_type {
+                        "content-length" => {
+                            Some(Box::new(ContentLengthReader::new(length as usize)))
+                        }
+                        "chunked" => Some(Box::new(ChunkedReader::new())),
+                        "http/1.0" => Some(Box::new(Http10Reader {})),
+                        _ => {
+                            panic!("Invalid role and framing type combination");
                         }
                     }
-                    _ => match (&self.their_role, self._cstate.states[&self.their_role]) {
-                        (Role::Client, State::Idle) => Some(Box::new(IdleClientReader {})),
-                        (Role::Server, State::Idle) => Some(Box::new(SendResponseServerReader {})),
-                        (Role::Client, State::SendResponse) => {
-                            Some(Box::new(SendResponseServerReader {}))
-                        }
-                        (Role::Client, State::Done) => Some(Box::new(ClosedReader {})),
-                        (Role::Client, State::MustClose) => Some(Box::new(ClosedReader {})),
-                        (Role::Client, State::Closed) => Some(Box::new(ClosedReader {})),
-                        (Role::Server, State::Done) => Some(Box::new(ClosedReader {})),
-                        (Role::Server, State::MustClose) => Some(Box::new(ClosedReader {})),
-                        (Role::Server, State::Closed) => Some(Box::new(ClosedReader {})),
-                        _ => None,
-                    },
                 }
-            } else {
-                None
+                _ => match (&self.their_role, self._cstate.states[&self.their_role]) {
+                    (Role::Client, State::Idle) => Some(Box::new(IdleClientReader {})),
+                    (Role::Server, State::Idle) => Some(Box::new(SendResponseServerReader {})),
+                    (Role::Server, State::SendResponse) => {
+                        Some(Box::new(SendResponseServerReader {}))
+                    }
+                    (Role::Client, State::Done) => Some(Box::new(ClosedReader {})),
+                    (Role::Client, State::MustClose) => Some(Box::new(ClosedReader {})),
+                    (Role::Client, State::Closed) => Some(Box::new(ClosedReader {})),
+                    (Role::Server, State::Done) => Some(Box::new(ClosedReader {})),
+                    (Role::Server, State::MustClose) => Some(Box::new(ClosedReader {})),
+                    (Role::Server, State::Closed) => Some(Box::new(ClosedReader {})),
+                    _ => None,
+                },
             };
         }
     }
@@ -407,7 +421,7 @@ impl Connection {
         &mut self,
         mut event: Event,
     ) -> Result<Option<Vec<u8>>, ProtocolError> {
-        if self._cstate.states[&self.our_role] == State::Error {
+        if self.get_our_state() == State::Error {
             return Err(ProtocolError::LocalProtocolError(
                 "Can't send data when our state is ERROR".to_string().into(),
             ));
@@ -417,13 +431,16 @@ impl Connection {
         } else {
             event
         };
+        let mut res: Result<Vec<u8>, ProtocolError> = Ok(vec![]);
+        {
+            res = self._writer.as_mut().unwrap()(event.clone());
+        }
         self._process_event(self.our_role, event.clone());
-
         let event_type: EventType = (&event).into();
         if event_type == EventType::ConnectionClosed {
             return Ok(None);
         } else {
-            match self._writer.as_mut().unwrap()(Box::new(event)) {
+            match res {
                 Ok(data_list) => Ok(Some(data_list)),
                 Err(error) => {
                     self._process_error(self.our_role);

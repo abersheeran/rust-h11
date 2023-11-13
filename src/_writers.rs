@@ -1,11 +1,11 @@
 use crate::{
-    _events::{Data, EndOfMessage, Request, Response},
+    Event,
+    _events::{Request, Response},
     _headers::Headers,
     _util::ProtocolError,
 };
-use std::any::Any;
 
-pub type WriterFnMut = dyn FnMut(Box<dyn Any>) -> Result<Vec<u8>, ProtocolError>;
+pub type WriterFnMut = dyn FnMut(Event) -> Result<Vec<u8>, ProtocolError>;
 
 fn _write_headers(headers: &Headers) -> Result<Vec<u8>, ProtocolError> {
     let mut data_list = Vec::new();
@@ -44,10 +44,10 @@ fn _write_request(request: &Request) -> Result<Vec<u8>, ProtocolError> {
     Ok(data_list)
 }
 
-pub fn write_request(event: Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
-    match event.downcast_ref::<Request>() {
-        Some(request) => _write_request(request),
-        None => panic!("Expected Request event, got {:?}", event),
+pub fn write_request(event: Event) -> Result<Vec<u8>, ProtocolError> {
+    match event {
+        Event::Request(request) => _write_request(&request),
+        _ => panic!("Expected Request event, got {:?}", event),
     }
 }
 
@@ -69,21 +69,20 @@ fn _write_response(response: &Response) -> Result<Vec<u8>, ProtocolError> {
     Ok(data_list)
 }
 
-pub fn write_response(event: Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
-    match event.downcast_ref::<Response>() {
-        Some(response) => _write_response(response),
-        None => panic!("Expected Response event, got {:?}", event),
+pub fn write_response(event: Event) -> Result<Vec<u8>, ProtocolError> {
+    match event {
+        Event::NormalResponse(response) => _write_response(&response),
+        Event::InformationalResponse(response) => _write_response(&response),
+        _ => panic!("Expected Response event, got {:?}", event),
     }
 }
 
 trait BodyWriter {
-    fn call(&mut self, event: Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
-        if event.is::<Data>() {
-            self.send_data(&event.downcast_ref::<Data>().unwrap().data)
-        } else if event.is::<EndOfMessage>() {
-            self.send_eom(&event.downcast_ref::<EndOfMessage>().unwrap().headers)
-        } else {
-            panic!("Unknown event type");
+    fn call(&mut self, event: Event) -> Result<Vec<u8>, ProtocolError> {
+        match event {
+            Event::Data(data) => self.send_data(&data.data),
+            Event::EndOfMessage(eom) => self.send_eom(&eom.headers),
+            _ => panic!("Unknown event type {:?}", event),
         }
     }
 
@@ -122,11 +121,9 @@ impl BodyWriter for ContentLengthWriter {
     }
 }
 
-pub fn content_length_writer(
-    length: isize,
-) -> impl FnMut(Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
+pub fn content_length_writer(length: isize) -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = ContentLengthWriter { length };
-    move |data: Box<dyn Any>| writer.call(data)
+    move |event: Event| writer.call(event)
 }
 
 struct ChunkedWriter;
@@ -158,9 +155,9 @@ impl BodyWriter for ChunkedWriter {
     }
 }
 
-pub fn chunked_writer() -> impl FnMut(Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
+pub fn chunked_writer() -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = ChunkedWriter;
-    move |data: Box<dyn Any>| writer.call(data)
+    move |event: Event| writer.call(event)
 }
 
 struct Http10Writer;
@@ -183,7 +180,7 @@ impl BodyWriter for Http10Writer {
     }
 }
 
-pub fn http10_writer() -> impl FnMut(Box<dyn Any>) -> Result<Vec<u8>, ProtocolError> {
+pub fn http10_writer() -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = Http10Writer;
-    move |data: Box<dyn Any>| writer.call(data)
+    move |event: Event| writer.call(event)
 }
