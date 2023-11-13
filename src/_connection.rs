@@ -381,10 +381,10 @@ impl Connection {
         match self._extract_next_receive_event() {
             Ok(event) => {
                 match event {
-                    Event::NeedData() | Event::Paused() => {
+                    Event::NeedData() | Event::Paused() => {}
+                    _ => {
                         self._process_event(self.their_role, event.clone())?;
                     }
-                    _ => {}
                 };
 
                 if let Event::NeedData() = event.clone() {

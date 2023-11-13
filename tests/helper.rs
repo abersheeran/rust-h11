@@ -99,24 +99,23 @@
 use h11::{Connection, Data, Event, EventType, ProtocolError, Role};
 use std::collections::HashMap;
 
-pub fn get_all_events(conn: &mut Connection) -> Vec<Event> {
+pub fn get_all_events(conn: &mut Connection) -> Result<Vec<Event>, ProtocolError> {
     let mut got_events = Vec::new();
     loop {
-        if let Ok(event) = conn.next_event() {
-            let event_type = EventType::from(&event);
-            if event_type == EventType::NeedData || event_type == EventType::Paused {
-                break;
-            }
-            got_events.push(event);
-            if event_type == EventType::ConnectionClosed {
-                break;
-            }
+        let event = conn.next_event()?;
+        let event_type = EventType::from(&event);
+        if event_type == EventType::NeedData || event_type == EventType::Paused {
+            break;
+        }
+        got_events.push(event);
+        if event_type == EventType::ConnectionClosed {
+            break;
         }
     }
-    return got_events;
+    return Ok(got_events);
 }
 
-pub fn receive_and_get(conn: &mut Connection, data: &[u8]) -> Vec<Event> {
+pub fn receive_and_get(conn: &mut Connection, data: &[u8]) -> Result<Vec<Event>, ProtocolError> {
     conn.receive_data(data);
     return get_all_events(conn);
 }
@@ -189,7 +188,7 @@ impl ConnectionPair {
                 .unwrap()
                 .receive_data(b"");
         }
-        let got_events = get_all_events(self.conn.get_mut(&self.other[&role]).unwrap());
+        let got_events = get_all_events(self.conn.get_mut(&self.other[&role]).unwrap())?;
         match expect {
             Some(expect) => assert_eq!(got_events, expect),
             None => assert_eq!(got_events, send_events),

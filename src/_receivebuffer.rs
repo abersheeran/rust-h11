@@ -22,7 +22,7 @@ impl ReceiveBuffer {
     }
 
     pub fn add(&mut self, byteslike: &[u8]) {
-        self.data.extend_from_slice(byteslike);
+        self.data.extend(byteslike);
     }
 
     pub fn len(&self) -> usize {

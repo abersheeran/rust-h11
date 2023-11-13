@@ -10,7 +10,7 @@ use regex::bytes::Regex;
 
 lazy_static! {
     static ref HEADER_FIELD_RE: Regex = Regex::new(&format!(r"^{}$", *HEADER_FIELD)).unwrap();
-    static ref OBS_FOLD_RE: Regex = Regex::new(r"[ \t]+").unwrap();
+    static ref OBS_FOLD_RE: Regex = Regex::new(r"^[ \t]+").unwrap();
 }
 
 fn _obsolete_line_fold(lines: Vec<&[u8]>) -> Result<Vec<Vec<u8>>, ProtocolError> {
