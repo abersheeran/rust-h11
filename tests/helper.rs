@@ -105,10 +105,12 @@ pub fn get_all_events(conn: &mut Connection) -> Result<Vec<Event>, ProtocolError
         let event = conn.next_event()?;
         let event_type = EventType::from(&event);
         if event_type == EventType::NeedData || event_type == EventType::Paused {
+            println!("NeedData or Paused");
             break;
         }
         got_events.push(event);
         if event_type == EventType::ConnectionClosed {
+            println!("ConnectionClosed");
             break;
         }
     }

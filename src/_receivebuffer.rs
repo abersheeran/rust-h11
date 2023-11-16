@@ -29,6 +29,10 @@ impl ReceiveBuffer {
         self.data.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
     fn extract(&mut self, count: usize) -> Vec<u8> {
         let out = self.data.drain(..min(count, self.data.len())).collect();
         self.next_line_search = 0;
@@ -99,6 +103,16 @@ impl ReceiveBuffer {
             return false;
         }
         self.data[0] < 0x21
+    }
+}
+
+impl From<Vec<u8>> for ReceiveBuffer {
+    fn from(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            next_line_search: 0,
+            multiple_lines_search: 0,
+        }
     }
 }
 

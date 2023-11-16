@@ -156,7 +156,7 @@ impl BodyWriter for ChunkedWriter {
 }
 
 pub fn chunked_writer() -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
-    let mut writer = ChunkedWriter;
+    let mut writer = ChunkedWriter {};
     move |event: Event| writer.call(event)
 }
 
@@ -181,6 +181,6 @@ impl BodyWriter for Http10Writer {
 }
 
 pub fn http10_writer() -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
-    let mut writer = Http10Writer;
+    let mut writer = Http10Writer {};
     move |event: Event| writer.call(event)
 }

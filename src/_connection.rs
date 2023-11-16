@@ -414,14 +414,7 @@ impl Connection {
         }
     }
 
-    pub fn send(&mut self, event: Event) -> Result<Option<Vec<u8>>, ProtocolError> {
-        self.send_with_data_passthrough(event)
-    }
-
-    pub fn send_with_data_passthrough(
-        &mut self,
-        mut event: Event,
-    ) -> Result<Option<Vec<u8>>, ProtocolError> {
+    pub fn send(&mut self, mut event: Event) -> Result<Option<Vec<u8>>, ProtocolError> {
         if self.get_our_state() == State::Error {
             return Err(ProtocolError::LocalProtocolError(
                 "Can't send data when our state is ERROR".to_string().into(),
