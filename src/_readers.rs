@@ -275,6 +275,7 @@ impl Reader for ChunkedReader {
             }
         }
         assert_eq!(self.bytes_to_discard, 0);
+        let chunk_start: bool;
         if self.bytes_in_chunk == 0 {
             if let Some(chunk_header) = buf.maybe_extract_next_line() {
                 let matches = match CHUNK_HEADER_RE.captures(&chunk_header) {
@@ -303,8 +304,10 @@ impl Reader for ChunkedReader {
             } else {
                 return Ok(None);
             }
+            chunk_start = true;
+        } else {
+            chunk_start = false;
         }
-        let chunk_start = self.bytes_in_chunk == 0;
         assert!(self.bytes_in_chunk > 0);
 
         if let Some(data) = buf.maybe_extract_at_most(self.bytes_in_chunk) {
@@ -380,7 +383,6 @@ impl Reader for ClosedReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::EventType;
 
     #[test]
     fn test_obsolete_line_fold_bytes() {
@@ -395,124 +397,6 @@ mod tests {
             vec![b"aaa".to_vec(), b"bbb ccc".to_vec(), b"ddd".to_vec()]
         );
     }
-
-    // def _run_reader_iter(
-    //     reader: Any, buf: bytes, do_eof: bool
-    // ) -> Generator[Any, None, None]:
-    //     while True:
-    //         event = reader(buf)
-    //         if event is None:
-    //             break
-    //         yield event
-    //         # body readers have undefined behavior after returning EndOfMessage,
-    //         # because this changes the state so they don't get called again
-    //         if type(event) is EndOfMessage:
-    //             break
-    //     if do_eof:
-    //         assert not buf
-    //         yield reader.read_eof()
-
-    // def _run_reader(*args: Any) -> List[Event]:
-    //     events = list(_run_reader_iter(*args))
-    //     return normalize_data_events(events)
-
-    // def t_body_reader(thunk: Any, data: bytes, expected: Any, do_eof: bool = False) -> None:
-    //     # Simple: consume whole thing
-    //     print("Test 1")
-    //     buf = makebuf(data)
-    //     assert _run_reader(thunk(), buf, do_eof) == expected
-
-    //     # Incrementally growing buffer
-    //     print("Test 2")
-    //     reader = thunk()
-    //     buf = ReceiveBuffer()
-    //     events = []
-    //     for i in range(len(data)):
-    //         events += _run_reader(reader, buf, False)
-    //         buf += data[i : i + 1]
-    //     events += _run_reader(reader, buf, do_eof)
-    //     assert normalize_data_events(events) == expected
-
-    //     is_complete = any(type(event) is EndOfMessage for event in expected)
-    //     if is_complete and not do_eof:
-    //         buf = makebuf(data + b"trailing")
-    //         assert _run_reader(thunk(), buf, False) == expected
-
-    // def test_ContentLengthReader() -> None:
-    //     t_body_reader(lambda: ContentLengthReader(0), b"", [EndOfMessage()])
-
-    //     t_body_reader(
-    //         lambda: ContentLengthReader(10),
-    //         b"0123456789",
-    //         [Data(data=b"0123456789"), EndOfMessage()],
-    //     )
-
-    // def test_Http10Reader() -> None:
-    //     t_body_reader(Http10Reader, b"", [EndOfMessage()], do_eof=True)
-    //     t_body_reader(Http10Reader, b"asdf", [Data(data=b"asdf")], do_eof=False)
-    //     t_body_reader(
-    //         Http10Reader, b"asdf", [Data(data=b"asdf"), EndOfMessage()], do_eof=True
-    //     )
-
-    // def test_ChunkedReader() -> None:
-    //     t_body_reader(ChunkedReader, b"0\r\n\r\n", [EndOfMessage()])
-
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"0\r\nSome: header\r\n\r\n",
-    //         [EndOfMessage(headers=[("Some", "header")])],
-    //     )
-
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"5\r\n01234\r\n"
-    //         + b"10\r\n0123456789abcdef\r\n"
-    //         + b"0\r\n"
-    //         + b"Some: header\r\n\r\n",
-    //         [
-    //             Data(data=b"012340123456789abcdef"),
-    //             EndOfMessage(headers=[("Some", "header")]),
-    //         ],
-    //     )
-
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"5\r\n01234\r\n" + b"10\r\n0123456789abcdef\r\n" + b"0\r\n\r\n",
-    //         [Data(data=b"012340123456789abcdef"), EndOfMessage()],
-    //     )
-
-    //     # handles upper and lowercase hex
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"aA\r\n" + b"x" * 0xAA + b"\r\n" + b"0\r\n\r\n",
-    //         [Data(data=b"x" * 0xAA), EndOfMessage()],
-    //     )
-
-    //     # refuses arbitrarily long chunk integers
-    //     with pytest.raises(LocalProtocolError):
-    //         # Technically this is legal HTTP/1.1, but we refuse to process chunk
-    //         # sizes that don't fit into 20 characters of hex
-    //         t_body_reader(ChunkedReader, b"9" * 100 + b"\r\nxxx", [Data(data=b"xxx")])
-
-    //     # refuses garbage in the chunk count
-    //     with pytest.raises(LocalProtocolError):
-    //         t_body_reader(ChunkedReader, b"10\x00\r\nxxx", None)
-
-    //     # handles (and discards) "chunk extensions" omg wtf
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"5; hello=there\r\n"
-    //         + b"xxxxx"
-    //         + b"\r\n"
-    //         + b'0; random="junk"; some=more; canbe=lonnnnngg\r\n\r\n',
-    //         [Data(data=b"xxxxx"), EndOfMessage()],
-    //     )
-
-    //     t_body_reader(
-    //         ChunkedReader,
-    //         b"5   	 \r\n01234\r\n" + b"0\r\n\r\n",
-    //         [Data(data=b"01234"), EndOfMessage()],
-    //     )
 
     fn normalize_data_events(in_events: Vec<Event>) -> Vec<Event> {
         let mut out_events = Vec::new();
