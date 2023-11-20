@@ -444,7 +444,7 @@ mod tests {
                 }
             }
             if do_eof {
-                assert!(buf.is_empty());
+                assert!(buf.len() == 0);
                 events.push(reader.read_eof().unwrap());
             }
         }

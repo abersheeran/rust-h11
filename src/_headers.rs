@@ -14,8 +14,21 @@ lazy_static! {
     static ref FIELD_VALUE_RE: Regex = Regex::new(&format!(r"^{}$", *FIELD_VALUE)).unwrap();
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 pub struct Headers(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>);
+
+impl std::fmt::Debug for Headers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug_struct = f.debug_struct("Headers");
+        self.0.iter().for_each(|(raw_name, _, value)| {
+            debug_struct.field(
+                std::str::from_utf8(raw_name).unwrap(),
+                &std::str::from_utf8(value).unwrap(),
+            );
+        });
+        debug_struct.finish()
+    }
+}
 
 impl Headers {
     pub fn iter(&self) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)> + '_ {
@@ -46,7 +59,7 @@ pub fn normalize_and_validate(
     let mut new_headers = vec![];
     let mut seen_content_length = None;
     let mut saw_transfer_encoding = false;
-    for (name, value) in headers.iter() {
+    for (name, value) in headers {
         if !_parsed {
             if !FIELD_NAME_RE.is_match(&name) {
                 return Err(ProtocolError::LocalProtocolError(
@@ -59,7 +72,7 @@ pub fn normalize_and_validate(
                 ));
             }
         }
-        let raw_name = (*name).clone();
+        let raw_name = name.clone();
         let name = name.to_ascii_lowercase();
         if name == b"content-length" {
             let lengths: HashSet<Vec<u8>> = value
@@ -119,8 +132,9 @@ pub fn normalize_and_validate(
     Ok(Headers(new_headers))
 }
 
-pub fn get_comma_header(headers: &Headers, name: Vec<u8>) -> Vec<Vec<u8>> {
+pub fn get_comma_header(headers: &Headers, name: &[u8]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = vec![];
+    let name = name.to_ascii_lowercase();
     for (found_name, found_value) in headers.iter() {
         if found_name == name {
             for found_split_value in found_value.to_ascii_lowercase().split(|&b| b == b',') {
@@ -136,7 +150,7 @@ pub fn get_comma_header(headers: &Headers, name: Vec<u8>) -> Vec<Vec<u8>> {
 
 pub fn set_comma_header(
     headers: &Headers,
-    name: Vec<u8>,
+    name: &[u8],
     new_values: Vec<Vec<u8>>,
 ) -> Result<Headers, ProtocolError> {
     let mut new_headers = vec![];
@@ -146,7 +160,7 @@ pub fn set_comma_header(
         }
     }
     for new_value in new_values {
-        new_headers.push((name.clone(), new_value));
+        new_headers.push((name.to_vec(), new_value));
     }
     normalize_and_validate(new_headers, false)
 }
@@ -158,7 +172,7 @@ pub fn has_expect_100_continue(request: &Request) -> bool {
     if request.http_version < b"1.1".to_vec() {
         return false;
     }
-    let expect = get_comma_header(&request.headers, b"expect".to_vec());
+    let expect = get_comma_header(&request.headers, b"expect");
     expect.contains(&b"100-continue".to_vec())
 }
 
@@ -466,16 +480,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            get_comma_header(&headers, b"connection".to_vec()),
+            get_comma_header(&headers, b"connection"),
             vec![b"close".to_vec(), b"foo".to_vec(), b"bar".to_vec()]
         );
 
-        let headers = set_comma_header(
-            &headers,
-            b"newthing".to_vec(),
-            vec![b"a".to_vec(), b"b".to_vec()],
-        )
-        .unwrap();
+        let headers =
+            set_comma_header(&headers, b"newthing", vec![b"a".to_vec(), b"b".to_vec()]).unwrap();
 
         assert_eq!(
             headers,
@@ -500,12 +510,8 @@ mod tests {
             ])
         );
 
-        let headers = set_comma_header(
-            &headers,
-            b"whatever".to_vec(),
-            vec![b"different thing".to_vec()],
-        )
-        .unwrap();
+        let headers =
+            set_comma_header(&headers, b"whatever", vec![b"different thing".to_vec()]).unwrap();
 
         assert_eq!(
             headers,

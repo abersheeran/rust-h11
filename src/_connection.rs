@@ -54,7 +54,7 @@ impl From<Event> for RequestOrResponse {
 
 fn _keep_alive<T: Into<RequestOrResponse>>(event: T) -> bool {
     let event: RequestOrResponse = event.into();
-    let connection = get_comma_header(event.headers(), b"connection".to_vec());
+    let connection = get_comma_header(event.headers(), b"connection");
     if connection.contains(&b"close".to_vec()) {
         return false;
     }
@@ -79,13 +79,13 @@ fn _body_framing<T: Into<RequestOrResponse>>(request_method: &[u8], event: T) ->
         assert!(response.status_code >= 200);
     }
 
-    let trasfer_encodings = get_comma_header(event.headers(), b"transfer-encoding".to_vec());
+    let trasfer_encodings = get_comma_header(event.headers(), b"transfer-encoding");
     if !trasfer_encodings.is_empty() {
         assert!(trasfer_encodings == vec![b"chunked".to_vec()]);
         return ("chunked", 0);
     }
 
-    let content_lengths = get_comma_header(event.headers(), b"content-length".to_vec());
+    let content_lengths = get_comma_header(event.headers(), b"content-length");
     if !content_lengths.is_empty() {
         return (
             "content-length",
@@ -205,7 +205,7 @@ impl Connection {
                     self._cstate
                         .process_client_switch_proposal(Switch::SwitchConnect);
                 }
-                if get_comma_header(&request.headers, b"upgrade".to_vec()).len() > 0 {
+                if get_comma_header(&request.headers, b"upgrade").len() > 0 {
                     self._cstate
                         .process_client_switch_proposal(Switch::SwitchUpgrade);
                 }
@@ -425,7 +425,7 @@ impl Connection {
         } else {
             event
         };
-        let mut res: Result<Vec<u8>, ProtocolError> = Ok(vec![]);
+        let res: Result<Vec<u8>, ProtocolError>;
         {
             res = self._writer.as_mut().unwrap()(event.clone());
         }
@@ -460,30 +460,27 @@ impl Connection {
         }
         let (framing_type, _) = _body_framing(&method_for_choosing_headers, response.clone());
         if framing_type == "chunked" || framing_type == "http/1.0" {
-            headers = set_comma_header(&headers, b"content-length".to_vec(), vec![])?;
+            headers = set_comma_header(&headers, b"content-length", vec![])?;
             if self
                 .their_http_version
                 .clone()
                 .map(|v| v < b"1.1".to_vec())
                 .unwrap_or(true)
             {
-                headers = set_comma_header(&headers, b"transfer-encoding".to_vec(), vec![])?;
+                headers = set_comma_header(&headers, b"transfer-encoding", vec![])?;
                 if self._request_method.clone().unwrap() != b"HEAD".to_vec() {
                     need_close = true;
                 }
             } else {
-                headers = set_comma_header(
-                    &headers,
-                    b"transfer-encoding".to_vec(),
-                    vec![b"chunked".to_vec()],
-                )?;
+                headers =
+                    set_comma_header(&headers, b"transfer-encoding", vec![b"chunked".to_vec()])?;
             }
         }
         if !self._cstate.keep_alive || need_close {
-            let mut connection = get_comma_header(&headers, b"connection".to_vec());
+            let mut connection = get_comma_header(&headers, b"connection");
             connection.retain(|x| x != &b"keep-alive".to_vec());
             connection.push(b"close".to_vec());
-            headers = set_comma_header(&headers, b"connection".to_vec(), connection)?;
+            headers = set_comma_header(&headers, b"connection", connection)?;
         }
         return Ok(Response {
             headers,

@@ -330,8 +330,8 @@ fn test_chunked() {
             vec![Response {
                 status_code: 200,
                 headers: vec![
-                    (b"Transfer-Encoding".to_vec(), b"chunked".to_vec()),
-                    (b"hello".to_vec(), b"there".to_vec())
+                    (b"hello".to_vec(), b"there".to_vec()),
+                    (b"transfer-encoding".to_vec(), b"chunked".to_vec()),
                 ]
                 .into(),
                 http_version: b"1.1".to_vec(),
@@ -341,7 +341,7 @@ fn test_chunked() {
             None,
         )
         .unwrap(),
-        b"HTTP/1.1 200 \r\nTransfer-Encoding: chunked\r\nhello: there\r\n\r\n".to_vec()
+        b"HTTP/1.1 200 \r\nhello: there\r\ntransfer-encoding: chunked\r\n\r\n".to_vec()
     );
     assert_eq!(
         p.send(
