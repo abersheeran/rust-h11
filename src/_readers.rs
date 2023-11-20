@@ -1,5 +1,5 @@
 use crate::{
-    _abnf::{HEADER_FIELD, REQUEST_LINE, STATUS_LINE},
+    _abnf::{CHUNK_HEADER, HEADER_FIELD, REQUEST_LINE, STATUS_LINE},
     _events::{ConnectionClosed, Data, EndOfMessage, Event, Request, Response},
     _headers::normalize_and_validate,
     _receivebuffer::ReceiveBuffer,
@@ -229,7 +229,7 @@ impl Reader for ContentLengthReader {
 }
 
 lazy_static! {
-    static ref CHUNK_HEADER_RE: Regex = Regex::new(r"([0-9A-Fa-f]){1,20}").unwrap();
+    static ref CHUNK_HEADER_RE: Regex = Regex::new(&CHUNK_HEADER).unwrap();
 }
 
 #[derive(Clone)]
@@ -277,18 +277,32 @@ impl Reader for ChunkedReader {
         assert_eq!(self.bytes_to_discard, 0);
         if self.bytes_in_chunk == 0 {
             if let Some(chunk_header) = buf.maybe_extract_next_line() {
-                let matches = CHUNK_HEADER_RE.find(&chunk_header).unwrap();
-                self.bytes_in_chunk = usize::from_str_radix(
-                    std::str::from_utf8(&matches.as_bytes().to_vec()).unwrap(),
+                let matches = match CHUNK_HEADER_RE.captures(&chunk_header) {
+                    Some(matches) => matches,
+                    None => {
+                        return Err(ProtocolError::LocalProtocolError(
+                            format!("illegal chunk header: {:?}", &chunk_header).into(),
+                        ))
+                    }
+                };
+                self.bytes_in_chunk = match usize::from_str_radix(
+                    std::str::from_utf8(&matches["chunk_size"].to_vec()).unwrap(),
                     16,
-                )
-                .unwrap();
+                ) {
+                    Ok(bytes_in_chunk) => bytes_in_chunk,
+                    Err(_) => {
+                        return Err(ProtocolError::LocalProtocolError(
+                            format!("illegal chunk size: {:?}", &matches["chunk_size"]).into(),
+                        ))
+                    }
+                };
                 if self.bytes_in_chunk == 0 {
                     self.reading_trailer = true;
                     return self.call(buf);
                 }
+            } else {
+                return Ok(None);
             }
-            return Ok(None);
         }
         let chunk_start = self.bytes_in_chunk == 0;
         assert!(self.bytes_in_chunk > 0);
@@ -550,8 +564,7 @@ mod tests {
                 events.push(reader.read_eof().unwrap());
             }
         }
-        assert_eq!(events.clone(), normalize_data_events(events.clone()));
-        return Ok(events);
+        return Ok(normalize_data_events(events));
     }
 
     fn t_body_reader(
@@ -690,8 +703,8 @@ mod tests {
             vec![
                 Data {
                     data: b"012340123456789abcdef".to_vec(),
-                    chunk_start: true,
-                    chunk_end: true,
+                    chunk_start: false,
+                    chunk_end: false,
                 }
                 .into(),
                 EndOfMessage {
@@ -709,8 +722,8 @@ mod tests {
             vec![
                 Data {
                     data: b"012340123456789abcdef".to_vec(),
-                    chunk_start: true,
-                    chunk_end: true,
+                    chunk_start: false,
+                    chunk_end: false,
                 }
                 .into(),
                 EndOfMessage::default().into(),
@@ -732,8 +745,8 @@ mod tests {
             vec![
                 Data {
                     data: vec![120; 0xAA],
-                    chunk_start: true,
-                    chunk_end: true,
+                    chunk_start: false,
+                    chunk_end: false,
                 }
                 .into(),
                 EndOfMessage::default().into(),
@@ -766,8 +779,8 @@ mod tests {
             vec![
                 Data {
                     data: b"xxxxx".to_vec(),
-                    chunk_start: true,
-                    chunk_end: true,
+                    chunk_start: false,
+                    chunk_end: false,
                 }
                 .into(),
                 EndOfMessage::default().into(),
@@ -782,8 +795,8 @@ mod tests {
             vec![
                 Data {
                     data: b"01234".to_vec(),
-                    chunk_start: true,
-                    chunk_end: true,
+                    chunk_start: false,
+                    chunk_end: false,
                 }
                 .into(),
                 EndOfMessage::default().into(),
