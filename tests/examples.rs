@@ -5,9 +5,7 @@ use h11::{
     Connection, ConnectionClosed, Data, EndOfMessage, Event, EventType, Headers, ProtocolError,
     Request, Response, Role,
 };
-use helper::{receive_and_get, ConnectionPair};
-
-use crate::helper::get_all_events;
+use helper::{get_all_events, receive_and_get, ConnectionPair};
 
 #[test]
 fn test_connection_basics_and_content_length() {
