@@ -184,3 +184,168 @@ pub fn http10_writer() -> impl FnMut(Event) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = Http10Writer {};
     move |event: Event| writer.call(event)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::_events::{Data, EndOfMessage};
+
+    #[test]
+    fn test_content_length_writer() {
+        let mut w = ContentLengthWriter { length: 5 };
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"123".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"123"
+        );
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"45".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"45"
+        );
+        assert_eq!(
+            w.call(Event::EndOfMessage(EndOfMessage::default()))
+                .unwrap(),
+            b""
+        );
+
+        let mut w = ContentLengthWriter { length: 5 };
+        assert!(w
+            .call(Event::Data(Data {
+                data: b"123456".to_vec(),
+                ..Default::default()
+            }))
+            .is_err());
+
+        let mut w = ContentLengthWriter { length: 5 };
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"123".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"123"
+        );
+        assert!(w
+            .call(Event::Data(Data {
+                data: b"456".to_vec(),
+                ..Default::default()
+            }))
+            .is_err());
+
+        let mut w = ContentLengthWriter { length: 5 };
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"123".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"123"
+        );
+        assert!(w
+            .call(Event::EndOfMessage(EndOfMessage::default()))
+            .is_err());
+
+        let mut w = ContentLengthWriter { length: 5 };
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"123".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"123"
+        );
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"45".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"45"
+        );
+        assert!(w
+            .call(Event::EndOfMessage(EndOfMessage {
+                headers: vec![(b"Etag".to_vec(), b"asdf".to_vec())].into(),
+            }))
+            .is_err());
+    }
+
+    #[test]
+    fn test_chunked_writer() {
+        let mut w = ChunkedWriter {};
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"aaa".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"3\r\naaa\r\n"
+        );
+
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"a".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"1\r\na\r\n"
+        );
+
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"b".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"1\r\nb\r\n"
+        );
+
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b""
+        );
+
+        assert_eq!(
+            w.call(Event::EndOfMessage(EndOfMessage {
+                headers: vec![(b"Etag".to_vec(), b"asdf".to_vec())].into(),
+            }))
+            .unwrap(),
+            b"0\r\nEtag: asdf\r\n\r\n"
+        );
+    }
+
+    #[test]
+    fn test_http10_writer() {
+        let mut w = Http10Writer {};
+        assert_eq!(
+            w.call(Event::Data(Data {
+                data: b"1234".to_vec(),
+                ..Default::default()
+            }))
+            .unwrap(),
+            b"1234"
+        );
+        assert_eq!(
+            w.call(Event::EndOfMessage(EndOfMessage::default()))
+                .unwrap(),
+            b""
+        );
+
+        let mut w = Http10Writer {};
+        assert!(w
+            .call(Event::EndOfMessage(EndOfMessage {
+                headers: vec![(b"Etag".to_vec(), b"asdf".to_vec())].into(),
+            }))
+            .is_err());
+    }
+}
