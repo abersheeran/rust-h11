@@ -29,6 +29,10 @@ impl ReceiveBuffer {
         self.data.len()
     }
 
+    pub fn bytes(&self) -> &[u8] {
+        &self.data
+    }
+
     fn extract(&mut self, count: usize) -> Vec<u8> {
         let out = self.data.drain(..min(count, self.data.len())).collect();
         self.next_line_search = 0;

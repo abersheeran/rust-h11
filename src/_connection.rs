@@ -346,6 +346,13 @@ impl Connection {
         }
     }
 
+    pub fn get_trailing_data(&self) -> (Vec<u8>, bool) {
+        (
+            self._receive_buffer.bytes().to_vec(),
+            self._receive_buffer_closed,
+        )
+    }
+
     pub fn receive_data(&mut self, data: &[u8]) {
         if data.len() > 0 {
             if self._receive_buffer_closed {

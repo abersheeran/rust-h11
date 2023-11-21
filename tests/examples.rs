@@ -1416,3 +1416,206 @@ fn test_reuse_simple() {
     )
     .unwrap();
 }
+
+// def test_pipelining() -> None:
+//     # Client doesn't support pipelining, so we have to do this by hand
+//     c = Connection(SERVER)
+//     assert c.next_event() is NEED_DATA
+//     # 3 requests all bunched up
+//     c.receive_data(
+//         b"GET /1 HTTP/1.1\r\nHost: a.com\r\nContent-Length: 5\r\n\r\n"
+//         b"12345"
+//         b"GET /2 HTTP/1.1\r\nHost: a.com\r\nContent-Length: 5\r\n\r\n"
+//         b"67890"
+//         b"GET /3 HTTP/1.1\r\nHost: a.com\r\n\r\n"
+//     )
+//     assert get_all_events(c) == [
+//         Request(
+//             method="GET",
+//             target="/1",
+//             headers=[("Host", "a.com"), ("Content-Length", "5")],
+//         ),
+//         Data(data=b"12345"),
+//         EndOfMessage(),
+//     ]
+//     assert c.their_state is DONE
+//     assert c.our_state is SEND_RESPONSE
+
+//     assert c.next_event() is PAUSED
+
+//     c.send(Response(status_code=200, headers=[]))  # type: ignore[arg-type]
+//     c.send(EndOfMessage())
+//     assert c.their_state is DONE
+//     assert c.our_state is DONE
+
+//     c.start_next_cycle()
+
+//     assert get_all_events(c) == [
+//         Request(
+//             method="GET",
+//             target="/2",
+//             headers=[("Host", "a.com"), ("Content-Length", "5")],
+//         ),
+//         Data(data=b"67890"),
+//         EndOfMessage(),
+//     ]
+//     assert c.next_event() is PAUSED
+//     c.send(Response(status_code=200, headers=[]))  # type: ignore[arg-type]
+//     c.send(EndOfMessage())
+//     c.start_next_cycle()
+
+//     assert get_all_events(c) == [
+//         Request(method="GET", target="/3", headers=[("Host", "a.com")]),
+//         EndOfMessage(),
+//     ]
+//     # Doesn't pause this time, no trailing data
+//     assert c.next_event() is NEED_DATA
+//     c.send(Response(status_code=200, headers=[]))  # type: ignore[arg-type]
+//     c.send(EndOfMessage())
+
+//     # Arrival of more data triggers pause
+//     assert c.next_event() is NEED_DATA
+//     c.receive_data(b"SADF")
+//     assert c.next_event() is PAUSED
+//     assert c.trailing_data == (b"SADF", False)
+//     # If EOF arrives while paused, we don't see that either:
+//     c.receive_data(b"")
+//     assert c.trailing_data == (b"SADF", True)
+//     assert c.next_event() is PAUSED
+//     c.receive_data(b"")
+//     assert c.next_event() is PAUSED
+
+#[test]
+fn test_pipelining() {
+    // Client doesn't support pipelining, so we have to do this by hand
+    let mut c = Connection::new(Role::Server, None);
+    assert_eq!(c.next_event().unwrap(), Event::NeedData {});
+
+    // 3 requests all bunched up
+    c.receive_data(
+        &vec![
+            b"GET /1 HTTP/1.1\r\nHost: a.com\r\nContent-Length: 5\r\n\r\n".to_vec(),
+            b"12345".to_vec(),
+            b"GET /2 HTTP/1.1\r\nHost: a.com\r\nContent-Length: 5\r\n\r\n".to_vec(),
+            b"67890".to_vec(),
+            b"GET /3 HTTP/1.1\r\nHost: a.com\r\n\r\n".to_vec(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<u8>>(),
+    );
+    assert_eq!(
+        get_all_events(&mut c).unwrap(),
+        vec![
+            Event::Request(Request {
+                method: b"GET".to_vec(),
+                target: b"/1".to_vec(),
+                headers: vec![
+                    (b"Host".to_vec(), b"a.com".to_vec()),
+                    (b"Content-Length".to_vec(), b"5".to_vec())
+                ]
+                .into(),
+                http_version: b"1.1".to_vec(),
+            }),
+            Event::Data(Data {
+                data: b"12345".to_vec(),
+                chunk_start: false,
+                chunk_end: false,
+            }),
+            Event::EndOfMessage(EndOfMessage::default()),
+        ],
+    );
+    assert_eq!(c.get_their_state(), h11::State::Done);
+    assert_eq!(c.get_our_state(), h11::State::SendResponse);
+
+    assert_eq!(c.next_event().unwrap(), Event::Paused {});
+
+    c.send(
+        Response {
+            status_code: 200,
+            headers: vec![].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"".to_vec(),
+        }
+        .into(),
+    )
+    .unwrap();
+    c.send(EndOfMessage::default().into()).unwrap();
+    assert_eq!(c.get_their_state(), h11::State::Done);
+    assert_eq!(c.get_our_state(), h11::State::Done);
+
+    c.start_next_cycle().unwrap();
+
+    assert_eq!(
+        get_all_events(&mut c).unwrap(),
+        vec![
+            Event::Request(Request {
+                method: b"GET".to_vec(),
+                target: b"/2".to_vec(),
+                headers: vec![
+                    (b"Host".to_vec(), b"a.com".to_vec()),
+                    (b"Content-Length".to_vec(), b"5".to_vec())
+                ]
+                .into(),
+                http_version: b"1.1".to_vec(),
+            }),
+            Event::Data(Data {
+                data: b"67890".to_vec(),
+                chunk_start: false,
+                chunk_end: false,
+            }),
+            Event::EndOfMessage(EndOfMessage::default()),
+        ],
+    );
+    assert_eq!(c.next_event().unwrap(), Event::Paused {});
+    c.send(
+        Response {
+            status_code: 200,
+            headers: vec![].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"".to_vec(),
+        }
+        .into(),
+    )
+    .unwrap();
+    c.send(EndOfMessage::default().into()).unwrap();
+    c.start_next_cycle().unwrap();
+
+    assert_eq!(
+        get_all_events(&mut c).unwrap(),
+        vec![
+            Event::Request(Request {
+                method: b"GET".to_vec(),
+                target: b"/3".to_vec(),
+                headers: vec![(b"Host".to_vec(), b"a.com".to_vec())].into(),
+                http_version: b"1.1".to_vec(),
+            }),
+            Event::EndOfMessage(EndOfMessage::default()),
+        ],
+    );
+    // Doesn't pause this time, no trailing data
+    assert_eq!(c.next_event().unwrap(), Event::NeedData {});
+    c.send(
+        Response {
+            status_code: 200,
+            headers: vec![].into(),
+            http_version: b"1.1".to_vec(),
+            reason: b"".to_vec(),
+        }
+        .into(),
+    )
+    .unwrap();
+    c.send(EndOfMessage::default().into()).unwrap();
+
+    // Arrival of more data triggers pause
+    assert_eq!(c.next_event().unwrap(), Event::NeedData {});
+    c.receive_data(b"SADF");
+    assert_eq!(c.next_event().unwrap(), Event::Paused {});
+    assert_eq!(c.get_trailing_data(), (b"SADF".to_vec(), false));
+    // If EOF arrives while paused, we don't see that either:
+    c.receive_data(b"");
+    assert_eq!(c.get_trailing_data(), (b"SADF".to_vec(), true));
+    assert_eq!(c.next_event().unwrap(), Event::Paused {});
+    c.receive_data(b"");
+    assert_eq!(c.next_event().unwrap(), Event::Paused {});
+}
