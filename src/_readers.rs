@@ -63,7 +63,7 @@ fn _decode_header_lines(lines: Vec<Vec<u8>>) -> Result<Vec<(Vec<u8>, Vec<u8>)>, 
 }
 
 lazy_static! {
-    static ref REQUEST_LINE_RE: Regex = Regex::new(&REQUEST_LINE).unwrap();
+    static ref REQUEST_LINE_RE: Regex = Regex::new(&format!(r"^{}$", *REQUEST_LINE)).unwrap();
 }
 
 pub trait Reader {
@@ -97,7 +97,7 @@ impl Reader for IdleClientReader {
             Some(matches) => matches,
             None => {
                 return Err(ProtocolError::LocalProtocolError(
-                    format!("illegal request line {:?}", &lines[0]).into(),
+                    format!("illegal request line {:?}", std::str::from_utf8(&lines[0])).into(),
                 ))
             }
         };

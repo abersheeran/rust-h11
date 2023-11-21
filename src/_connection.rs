@@ -114,7 +114,7 @@ pub struct Connection {
     _receive_buffer_closed: bool,
     pub their_http_version: Option<Vec<u8>>,
     _request_method: Option<Vec<u8>>,
-    pub client_is_waiting_for_100_continue: bool,
+    client_is_waiting_for_100_continue: bool,
 }
 
 impl Connection {
@@ -155,6 +155,10 @@ impl Connection {
 
     pub fn get_their_state(&self) -> State {
         self._cstate.states[&self.their_role]
+    }
+
+    pub fn get_client_is_waiting_for_100_continue(&self) -> bool {
+        self.client_is_waiting_for_100_continue
     }
 
     pub fn get_they_are_waiting_for_100_continue(&self) -> bool {

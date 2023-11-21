@@ -2,13 +2,14 @@ use crate::_abnf::{METHOD, REQUEST_TARGET};
 use crate::{_headers::Headers, _util::ProtocolError};
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
+use std::fmt::{self, Formatter};
 
 lazy_static! {
     static ref METHOD_RE: Regex = Regex::new(&format!(r"^{}$", *METHOD)).unwrap();
     static ref REQUEST_TARGET_RE: Regex = Regex::new(&format!(r"^{}$", *REQUEST_TARGET)).unwrap();
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct Request {
     pub method: Vec<u8>,
     pub headers: Headers,
@@ -57,6 +58,17 @@ impl Request {
             target,
             http_version,
         })
+    }
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Request")
+            .field("method", &String::from_utf8_lossy(&self.method))
+            .field("headers", &self.headers)
+            .field("target", &String::from_utf8_lossy(&self.target))
+            .field("http_version", &String::from_utf8_lossy(&self.http_version))
+            .finish()
     }
 }
 

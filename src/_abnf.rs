@@ -17,7 +17,7 @@ lazy_static! {
         OWS = OWS
     );
     pub static ref METHOD: String = TOKEN.to_string();
-    pub static ref REQUEST_TARGET: String = VCHAR.to_string();
+    pub static ref REQUEST_TARGET: String = format!("{}+", VCHAR);
     pub static ref HTTP_VERSION: String = r"HTTP/(?P<http_version>[0-9]\.[0-9])".to_string();
     pub static ref REQUEST_LINE: String = format!(
         r"(?P<method>{method}) (?P<target>{request_target}) {http_version}",
