@@ -380,7 +380,9 @@ impl Connection {
 
     pub fn next_event(&mut self) -> Result<Event, ProtocolError> {
         if self.get_their_state() == State::Error {
-            panic!("Can't receive data when peer state is ERROR");
+            return Err(ProtocolError::RemoteProtocolError(
+                "Can't receive data when peer state is ERROR".into(),
+            ));
         }
         match self._extract_next_receive_event() {
             Ok(event) => {
