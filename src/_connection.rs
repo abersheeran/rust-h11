@@ -6,6 +6,7 @@ use crate::_state::*;
 use crate::_util::*;
 use crate::_writers::*;
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 static DEFAULT_MAX_INCOMPLETE_EVENT_SIZE: usize = 16 * 1024;
 
@@ -288,8 +289,9 @@ impl Connection {
             let state = self._cstate.states[&self.our_role];
             self._writer = match state {
                 State::SendBody => {
+                    let request_method = self._request_method.clone().unwrap_or(vec![]);
                     let (framing_type, length) = _body_framing(
-                        &self._request_method.as_ref().unwrap(),
+                        &request_method,
                         RequestOrResponse::from(event.clone().unwrap()),
                     );
 
@@ -313,8 +315,9 @@ impl Connection {
         if self.get_their_state() != old_states[&self.their_role] {
             self._reader = match self._cstate.states[&self.their_role] {
                 State::SendBody => {
+                    let request_method = self._request_method.clone().unwrap_or(vec![]);
                     let (framing_type, length) = _body_framing(
-                        &self._request_method.as_ref().unwrap(),
+                        &request_method,
                         RequestOrResponse::from(event.clone().unwrap()),
                     );
                     match framing_type {
@@ -353,15 +356,15 @@ impl Connection {
         )
     }
 
-    pub fn receive_data(&mut self, data: &[u8]) {
-        if data.len() > 0 {
+    pub fn receive_data(&mut self, data: &[u8]) -> Result<(), String> {
+        Ok(if data.len() > 0 {
             if self._receive_buffer_closed {
-                panic!("received close, then received more data?");
+                return Err("received close, then received more data?".to_string());
             }
             self._receive_buffer.add(data);
         } else {
             self._receive_buffer_closed = true;
-        }
+        })
     }
 
     fn _extract_next_receive_event(&mut self) -> Result<Event, ProtocolError> {
@@ -391,30 +394,30 @@ impl Connection {
                 "Can't receive data when peer state is ERROR".into(),
             ));
         }
-        match self._extract_next_receive_event() {
-            Ok(event) => {
-                match event {
-                    Event::NeedData() | Event::Paused() => {}
-                    _ => {
-                        self._process_event(self.their_role, event.clone())?;
-                    }
-                };
-
-                if let Event::NeedData() = event.clone() {
-                    if self._receive_buffer.len() > self._max_incomplete_event_size {
-                        return Err(ProtocolError::RemoteProtocolError(
-                            ("Receive buffer too long".to_string(), 431).into(),
-                        ));
-                    }
-                    if self._receive_buffer_closed {
-                        return Err(ProtocolError::RemoteProtocolError(
-                            "peer unexpectedly closed connection".to_string().into(),
-                        ));
-                    }
+        match (|| {
+            let event = self._extract_next_receive_event()?;
+            match event {
+                Event::NeedData() | Event::Paused() => {}
+                _ => {
+                    self._process_event(self.their_role, event.clone())?;
                 }
+            };
 
-                Ok(event)
+            if let Event::NeedData() = event.clone() {
+                if self._receive_buffer.len() > self._max_incomplete_event_size {
+                    return Err(ProtocolError::RemoteProtocolError(
+                        ("Receive buffer too long".to_string(), 431).into(),
+                    ));
+                }
+                if self._receive_buffer_closed {
+                    return Err(ProtocolError::RemoteProtocolError(
+                        "peer unexpectedly closed connection".to_string().into(),
+                    ));
+                }
             }
+
+            Ok(event)
+        })() {
             Err(error) => {
                 self._process_error(self.their_role);
                 match error {
@@ -424,6 +427,7 @@ impl Connection {
                     _ => Err(error),
                 }
             }
+            Ok(any) => Ok(any),
         }
     }
 
@@ -438,12 +442,17 @@ impl Connection {
         } else {
             event
         };
-        let res: Result<Vec<u8>, ProtocolError>;
-        {
-            res = self._writer.as_mut().unwrap()(event.clone());
-        }
-        self._process_event(self.our_role, event.clone())?;
         let event_type: EventType = (&event).into();
+        let res: Result<Vec<u8>, ProtocolError> = match self._writer.as_mut() {
+            Some(_) if event_type == EventType::ConnectionClosed => Ok(vec![]),
+            Some(writer) => writer(event.clone()),
+            None => Err(ProtocolError::LocalProtocolError(
+                "Can't send data when our state is not SEND_BODY"
+                    .to_string()
+                    .into(),
+            )),
+        };
+        self._process_event(self.our_role, event.clone())?;
         if event_type == EventType::ConnectionClosed {
             return Ok(None);
         } else {
@@ -467,7 +476,7 @@ impl Connection {
     ) -> Result<Response, ProtocolError> {
         let mut headers = response.clone().headers;
         let mut need_close = false;
-        let mut method_for_choosing_headers = self._request_method.clone().unwrap();
+        let mut method_for_choosing_headers = self._request_method.clone().unwrap_or(vec![]);
         if method_for_choosing_headers == b"HEAD".to_vec() {
             method_for_choosing_headers = b"GET".to_vec();
         }
@@ -481,7 +490,7 @@ impl Connection {
                 .unwrap_or(true)
             {
                 headers = set_comma_header(&headers, b"transfer-encoding", vec![])?;
-                if self._request_method.clone().unwrap() != b"HEAD".to_vec() {
+                if self._request_method.clone().unwrap_or(vec![]) != b"HEAD".to_vec() {
                     need_close = true;
                 }
             } else {
@@ -490,10 +499,12 @@ impl Connection {
             }
         }
         if !self._cstate.keep_alive || need_close {
-            let mut connection = get_comma_header(&headers, b"connection");
+            let mut connection: HashSet<Vec<u8>> = get_comma_header(&headers, b"connection")
+                .into_iter()
+                .collect();
             connection.retain(|x| x != &b"keep-alive".to_vec());
-            connection.push(b"close".to_vec());
-            headers = set_comma_header(&headers, b"connection", connection)?;
+            connection.insert(b"close".to_vec());
+            headers = set_comma_header(&headers, b"connection", connection.into_iter().collect())?;
         }
         return Ok(Response {
             headers,

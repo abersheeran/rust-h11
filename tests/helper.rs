@@ -116,7 +116,7 @@ pub fn get_all_events(conn: &mut Connection) -> Result<Vec<Event>, ProtocolError
 }
 
 pub fn receive_and_get(conn: &mut Connection, data: &[u8]) -> Result<Vec<Event>, ProtocolError> {
-    conn.receive_data(data);
+    conn.receive_data(data).unwrap();
     return get_all_events(conn);
 }
 
@@ -180,13 +180,15 @@ impl ConnectionPair {
             self.conn
                 .get_mut(&self.other[&role])
                 .unwrap()
-                .receive_data(&data);
+                .receive_data(&data)
+                .unwrap();
         }
         if closed {
             self.conn
                 .get_mut(&self.other[&role])
                 .unwrap()
-                .receive_data(b"");
+                .receive_data(b"")
+                .unwrap();
         }
         let got_events = get_all_events(self.conn.get_mut(&self.other[&role]).unwrap())?;
         match expect {
