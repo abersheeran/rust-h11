@@ -1,0 +1,25 @@
+[project]
+name = "rust-h11"
+version = "0.1.0"
+description = "Python bindings for h11 in Rust"
+authors = [
+    {name = "abersheeran", email = "me@abersheeran.com"},
+]
+dependencies = []
+requires-python = ">=3.7"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+module-name = "rust_h11._rust"
+bindings = "pyo3"
+features = ["pyo3/extension-module"]
+
+[tool.pdm.dev-dependencies]
+test = [
+    "pytest>=7.4.3",
+]

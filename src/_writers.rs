@@ -5,8 +5,6 @@ use crate::{
     _util::ProtocolError,
 };
 
-pub type WriterFnMut = dyn FnMut(Event) -> Result<Vec<u8>, ProtocolError>;
-
 fn _write_headers(headers: &Headers) -> Result<Vec<u8>, ProtocolError> {
     let mut data_list = Vec::new();
     for (raw_name, name, value) in headers.raw_items() {
