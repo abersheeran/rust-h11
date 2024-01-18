@@ -115,7 +115,7 @@ pub struct Connection {
     _receive_buffer_closed: bool,
     pub their_http_version: Option<Vec<u8>>,
     _request_method: Option<Vec<u8>>,
-    client_is_waiting_for_100_continue: bool,
+    pub client_is_waiting_for_100_continue: bool,
 }
 
 impl Connection {
